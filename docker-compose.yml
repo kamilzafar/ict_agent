@@ -1,0 +1,36 @@
+version: '3.8'
+
+services:
+  api:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    ports:
+      - "8009:8009"
+    environment:
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - PINECONE_API_KEY=${PINECONE_API_KEY}
+      - PINECONE_INDEX_NAME=${PINECONE_INDEX_NAME:-default-index}
+      - MODEL_NAME=${MODEL_NAME:-gpt-4}
+      - TEMPERATURE=${TEMPERATURE:-0.7}
+      - MEMORY_DB_PATH=/app/memory_db
+      - SUMMARIZE_INTERVAL=${SUMMARIZE_INTERVAL:-10}
+      - API_HOST=0.0.0.0
+      - API_PORT=8009
+      - ENVIRONMENT=production
+      - WORKERS=${WORKERS:-1}
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+      - CORS_ORIGINS=${CORS_ORIGINS:-*}
+      - KEEP_ALIVE=${KEEP_ALIVE:-120}
+      - TIMEOUT=${TIMEOUT:-120}
+      - ROOT_PATH=${ROOT_PATH:-}
+      - TRUSTED_HOSTS=${TRUSTED_HOSTS:-*}
+    volumes:
+      - ./memory_db:/app/memory_db
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8009/health"]
+      interval: 30s
+      timeout: 120s
+      retries: 3
+

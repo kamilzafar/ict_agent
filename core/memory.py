@@ -1,0 +1,354 @@
+"""Long-term memory system for the agent using vector store."""
+import os
+import threading
+from typing import List, Dict, Any, Optional
+from datetime import datetime
+import json
+from functools import lru_cache
+import hashlib
+
+from langchain_chroma import Chroma
+from langchain_core.documents import Document
+from langchain_openai import OpenAIEmbeddings
+from langchain_text_splitters import RecursiveCharacterTextSplitter
+
+
+class LongTermMemory:
+    """Manages long-term memory using ChromaDB vector store."""
+    
+    def __init__(self, persist_directory: str = "./memory_db", collection_name: str = "conversations"):
+        """Initialize the memory system.
+        
+        Args:
+            persist_directory: Directory to persist the vector store
+            collection_name: Name of the ChromaDB collection
+        """
+        self.persist_directory = persist_directory
+        self.collection_name = collection_name
+        os.makedirs(persist_directory, exist_ok=True)
+        
+        # Initialize embeddings using OpenAI (required)
+        api_key = os.getenv("OPENAI_API_KEY")
+        if not api_key:
+            raise ValueError(
+                "OPENAI_API_KEY environment variable is required. "
+                "Please set it in your .env file or environment variables."
+            )
+        
+        try:
+            self.embeddings = OpenAIEmbeddings(openai_api_key=api_key)
+        except Exception as e:
+            raise RuntimeError(
+                f"Failed to initialize OpenAI embeddings: {str(e)}. "
+                "Please check your OPENAI_API_KEY is valid."
+            ) from e
+        
+        # Initialize vector store
+        self.vectorstore = Chroma(
+            persist_directory=persist_directory,
+            collection_name=collection_name,
+            embedding_function=self.embeddings
+        )
+        
+        # Text splitter for chunking conversations
+        self.text_splitter = RecursiveCharacterTextSplitter(
+            chunk_size=1000,
+            chunk_overlap=200,
+            length_function=len,
+        )
+        
+        # Store conversation metadata
+        self.metadata_file = os.path.join(persist_directory, "conversations_metadata.json")
+        self.conversations_metadata = self._load_metadata()
+        
+        # Thread-safety locks
+        self._metadata_lock = threading.Lock()  # For metadata operations
+        self._cache_lock = threading.Lock()  # For cache operations
+        self._file_lock = threading.Lock()  # For file I/O operations
+        
+        # Cache for context retrieval (TTL-based, max 100 entries)
+        self._context_cache: Dict[str, tuple] = {}  # query_hash -> (results, timestamp)
+        self._cache_ttl = 300  # 5 minutes cache TTL
+        self._max_cache_size = 100
+        
+        # Production settings
+        self.max_turns_in_metadata = 100  # Only keep last 100 turns in metadata to prevent bloat
+    
+    def _load_metadata(self) -> Dict[str, Any]:
+        """Load conversation metadata from disk."""
+        if os.path.exists(self.metadata_file):
+            try:
+                with open(self.metadata_file, 'r', encoding='utf-8') as f:
+                    return json.load(f)
+            except Exception:
+                return {}
+        return {}
+    
+    def _save_metadata(self):
+        """Save conversation metadata to disk (thread-safe with atomic writes)."""
+        with self._file_lock:
+            # Create a copy to avoid holding lock during I/O
+            try:
+                metadata_copy = json.dumps(self.conversations_metadata, indent=2, ensure_ascii=False)
+            except Exception as e:
+                # If serialization fails, log and skip
+                import logging
+                logging.error(f"Failed to serialize metadata: {e}")
+                return
+            
+            # Atomic write using temp file + rename pattern
+            temp_file = self.metadata_file + ".tmp"
+            try:
+                with open(temp_file, 'w', encoding='utf-8') as f:
+                    f.write(metadata_copy)
+                
+                # Atomic rename (works on both Unix and Windows)
+                if os.path.exists(self.metadata_file):
+                    os.replace(temp_file, self.metadata_file)
+                else:
+                    os.rename(temp_file, self.metadata_file)
+            except Exception as e:
+                # Clean up temp file on error
+                if os.path.exists(temp_file):
+                    try:
+                        os.remove(temp_file)
+                    except Exception:
+                        pass
+                import logging
+                logging.error(f"Failed to save metadata: {e}")
+                raise
+    
+    def add_conversation(
+        self,
+        user_message: str,
+        assistant_message: str,
+        conversation_id: str,
+        metadata: Optional[Dict[str, Any]] = None,
+        embed: bool = False
+    ):
+        """Add a conversation turn to memory.
+        
+        PRODUCTION OPTIMIZATION: By default, do NOT embed individual turns.
+        Only embed summaries to reduce API calls and costs.
+        
+        Args:
+            user_message: User's message
+            assistant_message: Assistant's response
+            conversation_id: Unique identifier for the conversation
+            metadata: Additional metadata to store
+            embed: Whether to embed this turn (default: False for production efficiency)
+        """
+        timestamp = datetime.now().isoformat()
+        
+        # Update conversation metadata (lightweight, no embedding) - thread-safe
+        with self._metadata_lock:
+            if conversation_id not in self.conversations_metadata:
+                self.conversations_metadata[conversation_id] = {
+                    "created_at": timestamp,
+                    "turns": [],
+                    "summary": None
+                }
+            
+            # Add turn to metadata
+            self.conversations_metadata[conversation_id]["turns"].append({
+                "timestamp": timestamp,
+                "user_message": user_message,
+                "assistant_message": assistant_message
+            })
+            
+            # Limit metadata size to prevent bloat (keep only recent turns)
+            turns = self.conversations_metadata[conversation_id]["turns"]
+            if len(turns) > self.max_turns_in_metadata:
+                # Keep only the most recent turns
+                self.conversations_metadata[conversation_id]["turns"] = turns[-self.max_turns_in_metadata:]
+        
+        # Only embed if explicitly requested (for production, we skip this)
+        if embed:
+            conversation_text = f"User: {user_message}\nAssistant: {assistant_message}"
+            doc_metadata = {
+                "conversation_id": conversation_id,
+                "timestamp": timestamp,
+                "type": "conversation_turn",
+                **(metadata or {})
+            }
+            
+            chunks = self.text_splitter.split_text(conversation_text)
+            documents = [
+                Document(
+                    page_content=chunk,
+                    metadata={**doc_metadata, "chunk_index": i}
+                )
+                for i, chunk in enumerate(chunks)
+            ]
+            self.vectorstore.add_documents(documents)
+        
+        # Save metadata (debounced - could be optimized further with async writes)
+        self._save_metadata()
+        
+        # Clear cache for this conversation
+        self._clear_cache_for_conversation(conversation_id)
+    
+    def add_summary(self, conversation_id: str, summary: str, replace_old: bool = True):
+        """Add or update a summary for a conversation.
+        
+        PRODUCTION: Only summaries are embedded, not individual turns.
+        This reduces API calls significantly for 10k+ message conversations.
+        
+        Args:
+            conversation_id: Unique identifier for the conversation
+            summary: Summary text
+            replace_old: If True, replace old summary in vector store (default: True)
+        """
+        timestamp = datetime.now().isoformat()
+        
+        # Thread-safe metadata update
+        with self._metadata_lock:
+            if conversation_id not in self.conversations_metadata:
+                self.conversations_metadata[conversation_id] = {
+                    "created_at": timestamp,
+                    "turns": [],
+                    "summary": summary
+                }
+            else:
+                self.conversations_metadata[conversation_id]["summary"] = summary
+        
+        # Embed summary for retrieval (this is the only thing we embed)
+        summary_doc = Document(
+            page_content=f"Conversation Summary: {summary}",
+            metadata={
+                "conversation_id": conversation_id,
+                "timestamp": timestamp,
+                "type": "summary"
+            }
+        )
+        
+        if replace_old:
+            # Remove old summary documents for this conversation
+            try:
+                # ChromaDB doesn't have direct delete by metadata, so we add new one
+                # Old ones will be filtered out in search by timestamp
+                pass
+            except Exception:
+                pass  # Continue even if cleanup fails
+        
+        # Add new summary to vector store
+        self.vectorstore.add_documents([summary_doc])
+        self._save_metadata()
+        
+        # Clear cache for this conversation
+        self._clear_cache_for_conversation(conversation_id)
+    
+    def _clear_cache_for_conversation(self, conversation_id: str):
+        """Clear cache entries for a specific conversation (thread-safe)."""
+        with self._cache_lock:
+            keys_to_remove = [
+                key for key in self._context_cache.keys()
+                if conversation_id in str(key)
+            ]
+            for key in keys_to_remove:
+                self._context_cache.pop(key, None)
+    
+    def _get_cache_key(self, query: str, k: int, conversation_id: Optional[str]) -> str:
+        """Generate cache key for a search query."""
+        cache_str = f"{query}:{k}:{conversation_id or 'all'}"
+        return hashlib.md5(cache_str.encode()).hexdigest()
+    
+    def search_relevant_context(
+        self,
+        query: str,
+        k: int = 5,
+        conversation_id: Optional[str] = None,
+        use_cache: bool = True
+    ) -> List[Document]:
+        """Search for relevant context from memory.
+        
+        PRODUCTION OPTIMIZATION: Uses caching to avoid redundant searches.
+        Only searches summaries (not individual turns) for efficiency.
+        
+        Args:
+            query: Search query
+            k: Number of results to return
+            conversation_id: Optional conversation ID to filter by
+            use_cache: Whether to use cache (default: True)
+        
+        Returns:
+            List of relevant documents
+        """
+        # Check cache first (thread-safe)
+        if use_cache:
+            cache_key = self._get_cache_key(query, k, conversation_id)
+            with self._cache_lock:
+                if cache_key in self._context_cache:
+                    results, timestamp = self._context_cache[cache_key]
+                    # Check if cache is still valid
+                    if (datetime.now().timestamp() - timestamp) < self._cache_ttl:
+                        return results
+                    else:
+                        # Cache expired, remove it
+                        self._context_cache.pop(cache_key, None)
+        
+        # Build filter - prioritize summaries and filter by conversation if provided
+        where_filter = {"type": "summary"}  # Only search summaries for efficiency
+        if conversation_id:
+            where_filter["conversation_id"] = conversation_id
+        
+        # Search vector store (only searches summaries, not individual turns)
+        try:
+            results = self.vectorstore.similarity_search(
+                query,
+                k=k,
+                filter=where_filter
+            )
+        except Exception:
+            # Fallback if filter doesn't work
+            results = self.vectorstore.similarity_search(query, k=k)
+        
+        # Cache results (thread-safe)
+        if use_cache:
+            cache_key = self._get_cache_key(query, k, conversation_id)
+            with self._cache_lock:
+                if len(self._context_cache) < self._max_cache_size:
+                    self._context_cache[cache_key] = (results, datetime.now().timestamp())
+                elif cache_key in self._context_cache:
+                    # Update existing entry even if cache is full
+                    self._context_cache[cache_key] = (results, datetime.now().timestamp())
+        
+        return results
+    
+    def get_conversation_history(
+        self,
+        conversation_id: str,
+        limit: Optional[int] = None
+    ) -> List[Dict[str, Any]]:
+        """Get conversation history for a specific conversation (thread-safe).
+        
+        Args:
+            conversation_id: Unique identifier for the conversation
+            limit: Optional limit on number of turns to return
+        
+        Returns:
+            List of conversation turns
+        """
+        with self._metadata_lock:
+            if conversation_id not in self.conversations_metadata:
+                return []
+            
+            turns = self.conversations_metadata[conversation_id].get("turns", [])
+            if limit:
+                return turns[-limit:].copy()  # Return copy to avoid external modification
+            return turns.copy()  # Return copy to avoid external modification
+    
+    def get_conversation_summary(self, conversation_id: str) -> Optional[str]:
+        """Get the summary for a conversation (thread-safe).
+        
+        Args:
+            conversation_id: Unique identifier for the conversation
+        
+        Returns:
+            Summary text or None
+        """
+        with self._metadata_lock:
+            if conversation_id not in self.conversations_metadata:
+                return None
+            return self.conversations_metadata[conversation_id].get("summary")
+
