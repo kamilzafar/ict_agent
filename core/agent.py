@@ -165,27 +165,37 @@ You help leads with course enrollment through WhatsApp conversations."""
                 break
         
         if user_message:
-            # Search for relevant context (cached, only searches summaries)
+            conversation_id = state.get("conversation_id")
+            
+            # Search for relevant context from summaries (cached, only searches summaries)
             relevant_docs = self.memory.search_relevant_context(
                 query=user_message,
                 k=3,  # Reduced from 5 for efficiency
-                conversation_id=state.get("conversation_id"),
+                conversation_id=conversation_id,
                 use_cache=True  # Use cache to avoid redundant searches
             )
             
             # Format context (limit to prevent token overflow)
             context_texts = []
             for doc in relevant_docs[:3]:  # Max 3 summaries
-                context_texts.append(f"[Previous conversation]: {doc.page_content}")
+                context_texts.append(f"[Previous conversation summary]: {doc.page_content}")
+            
+            # Also get conversation summary for current conversation if available
+            if conversation_id:
+                current_summary = self.memory.get_conversation_summary(conversation_id)
+                if current_summary:
+                    # Check if summary is not already in context_texts
+                    summary_already_included = any(current_summary in text for text in context_texts)
+                    if not summary_already_included:
+                        context_texts.insert(0, f"[Current conversation summary]: {current_summary}")
             
             if context_texts:
-                context_message = SystemMessage(
-                    content=f"Relevant context from previous conversations:\n\n" + 
-                           "\n\n".join(context_texts)
-                )
-                state["messages"].append(context_message)
+                # Store context in state for use in system prompt
+                # Don't add as SystemMessage here as it will be filtered out
                 state["context"] = [{"content": doc.page_content, "metadata": doc.metadata} 
                                    for doc in relevant_docs[:3]]
+                # Store formatted context text for system prompt
+                state["retrieved_context"] = "\n\n".join(context_texts)
         
         return state
     
@@ -198,21 +208,21 @@ You help leads with course enrollment through WhatsApp conversations."""
         system_message = SystemMessage(content=system_prompt)
         
         # Prepare messages with system prompt
-        # Only include system prompt if it's not already in the messages
-        # Limit conversation history to prevent context overflow (gpt-4.1-mini has 128k, but be safe)
+        # The system prompt already includes the conversation summary (all summarized turns)
+        # We only need to include the most recent messages that haven't been summarized
         agent_messages = [system_message]
         
-        # Limit to last 30 messages to manage context (with 128k tokens, this should be safe)
-        # Filter out any existing system messages to avoid duplication
+        # Filter out system messages (they're already in the system prompt)
+        # Keep only conversation messages (HumanMessage and AIMessage)
+        # These should only be the unsummarized turns (loaded in chat method)
         conversation_messages = [
             msg for msg in messages 
             if not isinstance(msg, SystemMessage)
         ]
         
-        if len(conversation_messages) > 30:
-            agent_messages.extend(conversation_messages[-30:])
-        else:
-            agent_messages.extend(conversation_messages)
+        # Add all conversation messages (they're already limited to unsummarized turns)
+        # The chat() method ensures we only load turns that haven't been summarized
+        agent_messages.extend(conversation_messages)
         
         # Call LLM
         response = self.llm_with_tools.invoke(agent_messages)
@@ -230,6 +240,10 @@ You help leads with course enrollment through WhatsApp conversations."""
         # Get conversation summary if available
         summary = self.memory.get_conversation_summary(conversation_id)
         summary_text = f"\n\nConversation Summary: {summary}" if summary else ""
+        
+        # Add retrieved context if available (from _retrieve_context)
+        retrieved_context = state.get("retrieved_context", "")
+        context_text = f"\n\nRetrieved Context from Previous Conversations:\n{retrieved_context}" if retrieved_context else ""
         
         # Use cached system prompt (loaded once at initialization)
         # This avoids file I/O on every request, improving performance
@@ -259,8 +273,8 @@ You help leads with course enrollment through WhatsApp conversations."""
 {summary_text}
 """
         
-        # Combine prompt
-        full_prompt = base_prompt + tool_info + context_info
+        # Combine prompt with context
+        full_prompt = base_prompt + tool_info + context_info + context_text
         
         return full_prompt
     
@@ -386,16 +400,58 @@ Summary:"""
         if not conversation_id:
             conversation_id = str(uuid.uuid4())
         
-        # Get current turn count
-        conversation_history = self.memory.get_conversation_history(conversation_id)
-        turn_count = len(conversation_history)
+        # Get current turn count and conversation history
+        all_conversation_history = self.memory.get_conversation_history(conversation_id)
+        turn_count = len(all_conversation_history)
         
-        # Create initial state
+        # Calculate which turns have been summarized
+        # After summarization, we should only load the most recent turns that haven't been summarized
+        # Example: If summarize_interval=10:
+        #   - Turns 1-10: All loaded (no summarization yet)
+        #   - Turn 11: Only turn 11 loaded (turns 1-10 are summarized)
+        #   - Turns 11-20: Only turns 11-20 loaded (turns 1-10 are summarized)
+        #   - Turn 21: Only turn 21 loaded (turns 1-20 are summarized)
+        
+        if turn_count > 0:
+            # Calculate how many complete summarization cycles have occurred
+            num_complete_cycles = turn_count // self.summarize_interval
+            
+            if num_complete_cycles > 0:
+                # We've had at least one summarization
+                # Only load the most recent turns that haven't been summarized yet
+                turns_since_last_summary = turn_count % self.summarize_interval
+                
+                if turns_since_last_summary == 0:
+                    # Exactly at a summarization point (e.g., turn 10, 20, 30)
+                    # Load the last summarize_interval turns (they will be summarized in this turn)
+                    # These are the turns since the last summarization
+                    conversation_history = all_conversation_history[-self.summarize_interval:]
+                else:
+                    # Load only the most recent turns that haven't been summarized
+                    # These are the turns since the last summarization
+                    conversation_history = all_conversation_history[-turns_since_last_summary:]
+            else:
+                # No summarization yet, load all turns (they're all recent)
+                conversation_history = all_conversation_history
+        else:
+            conversation_history = []
+        
+        # Load previous conversation history into messages
+        # This ensures the agent has context from previous turns that haven't been summarized
+        previous_messages = []
+        for turn in conversation_history:
+            # Add user message
+            previous_messages.append(HumanMessage(content=turn.get("user_message", "")))
+            # Add assistant message
+            previous_messages.append(AIMessage(content=turn.get("assistant_message", "")))
+        
+        # Create initial state with previous messages + current user message
         initial_state = {
-            "messages": [HumanMessage(content=user_input)],
+            "messages": previous_messages + [HumanMessage(content=user_input)],
             "conversation_id": conversation_id,
             "turn_count": turn_count + 1,
-            "context": []
+            "context": [],
+            "retrieved_context": ""  # Will be populated by _retrieve_context
         }
         
         # Prepare config
