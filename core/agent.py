@@ -1,5 +1,6 @@
 """LangGraph agent with long-term memory and summarization."""
 import os
+import re
 import uuid
 from typing import Annotated, TypedDict, List, Dict, Any, Optional
 from datetime import datetime
@@ -364,9 +365,113 @@ Summary:"""
         
         # Reconstruct state with only kept messages + system messages
         state["messages"] = system_messages + messages_to_keep
-        
+
         return state
-    
+
+    def _extract_and_update_lead_data(self, conversation_id: str, messages: List[BaseMessage]):
+        """Extract lead data from conversation and update stages.
+
+        Args:
+            conversation_id: Conversation ID
+            messages: List of messages from the conversation
+        """
+        # Always work with the latest lead_data snapshot to avoid redundant writes
+        lead_data_snapshot = self.memory.get_lead_data(conversation_id)
+
+        # Check for tool calls (especially append_lead_to_rag_sheets)
+        for message in messages:
+            if hasattr(message, 'tool_calls') and message.tool_calls:
+                for tool_call in message.tool_calls:
+                    if tool_call.get('name') == 'append_lead_to_rag_sheets':
+                        # Extract lead data from tool call arguments
+                        args = tool_call.get('args', {})
+
+                        if args.get('name'):
+                            self.memory.update_lead_field(conversation_id, 'name', args['name'])
+
+                        if args.get('phone'):
+                            self.memory.update_lead_field(conversation_id, 'phone', args['phone'])
+
+                        # Mark demo as shared when this tool is called
+                        self.memory.update_lead_field(conversation_id, 'demo_shared', True)
+
+                        # Extract other data from notes or metadata
+                        notes = args.get('notes', '')
+                        metadata = args.get('metadata', {})
+
+                        # Try to extract course from notes or metadata
+                        if 'Selected_Course:' in notes:
+                            course = notes.split('Selected_Course:')[1].split(',')[0].strip()
+                            self.memory.update_lead_field(conversation_id, 'selected_course', course)
+                        elif metadata.get('course'):
+                            self.memory.update_lead_field(conversation_id, 'selected_course', metadata['course'])
+
+                        # Try to extract education level
+                        if 'Education_Level:' in notes:
+                            education = notes.split('Education_Level:')[1].split(',')[0].strip()
+                            self.memory.update_lead_field(conversation_id, 'education_level', education)
+                        elif metadata.get('education'):
+                            self.memory.update_lead_field(conversation_id, 'education_level', metadata['education'])
+
+                        # Try to extract goal
+                        if 'Goal_Motivation:' in notes:
+                            goal = notes.split('Goal_Motivation:')[1].split(',')[0].strip()
+                            self.memory.update_lead_field(conversation_id, 'goal', goal)
+                        elif metadata.get('goal'):
+                            self.memory.update_lead_field(conversation_id, 'goal', metadata['goal'])
+
+        # Work only with user-authored text for heuristics to avoid picking up assistant prompts
+        user_text = ""
+        for msg in messages:
+            if isinstance(msg, HumanMessage) and hasattr(msg, "content"):
+                user_text += msg.content + " "
+
+        user_text_lower = user_text.lower()
+
+        # Basic name extraction when tool data is not available
+        if not lead_data_snapshot.get("name"):
+            name_match = re.search(r"(?:my name is|i am|i'm|this is)\s+([A-Za-z][A-Za-z\s]{1,40})", user_text, re.IGNORECASE)
+            if name_match:
+                candidate = name_match.group(1).strip(" .,!-")
+                if candidate:
+                    self.memory.update_lead_field(conversation_id, "name", candidate)
+
+        # Basic phone extraction
+        if not lead_data_snapshot.get("phone"):
+            phone_match = re.search(r"(\+?\d[\d\s\-]{8,15}\d)", user_text)
+            if phone_match:
+                cleaned = re.sub(r"[^\d+]", "", phone_match.group(1))
+                self.memory.update_lead_field(conversation_id, "phone", cleaned)
+
+        # Basic education detection
+        if not lead_data_snapshot.get("education_level"):
+            education_map = {
+                "matric": "Matric/Intermediate",
+                "intermediate": "Matric/Intermediate",
+                "o level": "OLevel/Alevel",
+                "a level": "OLevel/Alevel",
+                "bachelor": "Bachelors",
+                "bachelors": "Bachelors",
+                "bs ": "Bachelors",
+                "master": "Masters",
+                "masters": "Masters",
+                "mba": "Masters",
+                "acca": "Professional",
+                "ca ": "Professional",
+                "cima": "Professional",
+            }
+            for keyword, label in education_map.items():
+                if keyword in user_text_lower:
+                    self.memory.update_lead_field(conversation_id, "education_level", label)
+                    break
+
+        # Detect course mentions
+        courses = ['cta', 'acca', 'uk taxation', 'uae taxation', 'us taxation', 'finance', 'accounting']
+        for course in courses:
+            if course in user_text_lower and not self.memory.get_lead_data(conversation_id).get('selected_course'):
+                self.memory.update_lead_field(conversation_id, 'selected_course', course.upper())
+                break
+
     def _extract_conversation_text(self, messages: List[BaseMessage]) -> str:
         """Extract conversation text from messages."""
         conversation_parts = []
@@ -470,9 +575,12 @@ Summary:"""
             msg for msg in final_state["messages"]
             if isinstance(msg, AIMessage) and not (hasattr(msg, 'tool_calls') and msg.tool_calls)
         ]
-        
+
         assistant_response = assistant_messages[-1].content if assistant_messages else "I apologize, but I couldn't generate a response."
-        
+
+        # Extract and update lead data / stage tracking
+        self._extract_and_update_lead_data(conversation_id, final_state["messages"])
+
         # Save conversation to memory (without embedding - production optimization)
         # Only summaries are embedded, not individual turns
         self.memory.add_conversation(
@@ -485,11 +593,16 @@ Summary:"""
             embed=False  # Production: Don't embed individual turns, only summaries
         )
         
+        # Get current stage and lead data
+        current_stage = self.memory.get_stage(conversation_id)
+        lead_data = self.memory.get_lead_data(conversation_id)
+
         return {
             "response": assistant_response,
             "conversation_id": conversation_id,
             "turn_count": turn_count + 1,
             "context_used": final_state.get("context", []),
-            "messages": final_state["messages"]
+            "messages": final_state["messages"],
+            "stage": current_stage,
+            "lead_data": lead_data
         }
-

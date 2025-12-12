@@ -183,6 +183,8 @@ class ChatResponse(BaseModel):
     conversation_id: str = Field(..., description="Conversation ID")
     turn_count: int = Field(..., description="Current turn count in the conversation")
     context_used: List[Dict[str, Any]] = Field(default_factory=list, description="Relevant context retrieved from memory")
+    stage: str = Field(default="NEW", description="Current stage of the lead")
+    lead_data: Dict[str, Any] = Field(default_factory=dict, description="Collected lead information")
     timestamp: str = Field(default_factory=lambda: datetime.now().isoformat())
 
 
@@ -273,6 +275,8 @@ async def chat(request: ChatRequest):
             conversation_id=result["conversation_id"],
             turn_count=result["turn_count"],
             context_used=result.get("context_used", []),
+            stage=result.get("stage", "NEW"),
+            lead_data=result.get("lead_data", {}),
             timestamp=datetime.now().isoformat()
         )
     
@@ -384,7 +388,9 @@ async def list_conversations(limit: Optional[int] = 50):
                 "conversation_id": conv_id,
                 "created_at": conv_data.get("created_at", ""),
                 "turn_count": len(conv_data.get("turns", [])),
-                "summary": conv_data.get("summary")
+                "summary": conv_data.get("summary"),
+                "stage": conv_data.get("stage", "NEW"),
+                "stage_updated_at": conv_data.get("stage_updated_at", "")
             })
         
         # Sort by created_at (newest first)
@@ -500,13 +506,159 @@ async def search_conversation_context(
         )
 
 
+@app.get("/leads/by-stage/{stage}", tags=["Leads"], dependencies=[Depends(verify_api_key)])
+async def get_leads_by_stage(stage: str):
+    """Get all leads in a specific stage.
+
+    Args:
+        stage: Stage to filter by (NEW, NAME_COLLECTED, COURSE_SELECTED, etc.)
+
+    Returns:
+        List of leads in that stage
+
+    Raises:
+        HTTPException: If agent is not initialized or invalid stage
+    """
+    if agent is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Agent is not initialized"
+        )
+
+    valid_stages = list(agent.memory.STAGES.keys())
+
+    if stage not in valid_stages:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid stage. Must be one of: {valid_stages}"
+        )
+
+    try:
+        leads = agent.memory.get_leads_by_stage(stage)
+
+        return {
+            "stage": stage,
+            "count": len(leads),
+            "leads": leads
+        }
+
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error retrieving leads: {str(e)}"
+        )
+
+
+@app.get("/leads/stats", tags=["Leads"], dependencies=[Depends(verify_api_key)])
+async def get_lead_stats():
+    """Get lead statistics across all stages.
+
+    Returns:
+        Statistics including counts per stage and conversion rate
+
+    Raises:
+        HTTPException: If agent is not initialized
+    """
+    if agent is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Agent is not initialized"
+        )
+
+    try:
+        stats = agent.memory.get_all_stage_stats()
+        return stats
+
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error retrieving stats: {str(e)}"
+        )
+
+
+@app.post("/conversations/{conversation_id}/update-stage", tags=["Conversations"], dependencies=[Depends(verify_api_key)])
+async def update_conversation_stage(conversation_id: str, new_stage: str):
+    """Manually update a conversation's stage.
+
+    Args:
+        conversation_id: Unique identifier for the conversation
+        new_stage: New stage to set
+
+    Returns:
+        Confirmation message with updated stage
+
+    Raises:
+        HTTPException: If agent is not initialized or invalid stage
+    """
+    if agent is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Agent is not initialized"
+        )
+
+    try:
+        agent.memory.manually_set_stage(conversation_id, new_stage)
+
+        return {
+            "message": "Stage updated successfully",
+            "conversation_id": conversation_id,
+            "new_stage": new_stage
+        }
+
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e)
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error updating stage: {str(e)}"
+        )
+
+
+@app.get("/conversations/{conversation_id}/stage", tags=["Conversations"], dependencies=[Depends(verify_api_key)])
+async def get_conversation_stage(conversation_id: str):
+    """Get the current stage and lead data for a conversation.
+
+    Args:
+        conversation_id: Unique identifier for the conversation
+
+    Returns:
+        Dictionary with stage and lead data
+
+    Raises:
+        HTTPException: If agent is not initialized
+    """
+    if agent is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Agent is not initialized"
+        )
+
+    try:
+        stage = agent.memory.get_stage(conversation_id)
+        lead_data = agent.memory.get_lead_data(conversation_id)
+
+        return {
+            "conversation_id": conversation_id,
+            "stage": stage,
+            "lead_data": lead_data
+        }
+
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error retrieving stage: {str(e)}"
+        )
+
+
 if __name__ == "__main__":
     import uvicorn
-    
+
     uvicorn.run(
         "app:app",
         host=os.getenv("API_HOST", "0.0.0.0"),
         port=int(os.getenv("API_PORT", "8009")),
         reload=os.getenv("API_RELOAD", "false").lower() == "true"
     )
-
