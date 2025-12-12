@@ -60,10 +60,28 @@ jobs:
         uses: actions/checkout@v5
 
       - name: Deploy to Hostinger VPS
-        uses: hostinger/deploy-action@v1
+        uses: appleboy/ssh-action@v1.0.3
         with:
-          api-key: ${{ secrets.HOSTINGER_API_KEY }}
-          virtual-machine: ${{ vars.HOSTINGER_VM_ID }}
-          project-name: agent
-          docker-compose-path: compose.yaml
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USERNAME }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          port: ${{ secrets.VPS_PORT || '22' }}
+          script: |
+            # Navigate to application directory
+            cd ~/agent || cd /root/agent || exit 1
+            
+            # Pull the latest Docker image
+            docker pull ${{ env.DOCKER_IMAGE }}:${{ env.DOCKER_TAG }}
+            
+            # Stop and remove old containers
+            docker compose down || true
+            
+            # Start containers with new image
+            docker compose up -d
+            
+            # Clean up old/unused images
+            docker image prune -f
+            
+            # Show running containers
+            docker compose ps
 
