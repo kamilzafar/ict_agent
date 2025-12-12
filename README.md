@@ -192,6 +192,29 @@ image: kamilzafar/ict_agent:v1.0.0  # Instead of :latest
 
 See `docs/DOCKER_PRODUCTION.md` for detailed production deployment guide.
 
+### CI/CD Pipeline (GitHub Actions)
+
+The repository includes an automated CI/CD pipeline that:
+1. **Builds** Docker image on every push to `main`/`master`
+2. **Pushes** image to Docker Hub (`kamilzafar/ict_agent:latest`)
+3. **Deploys** automatically to Hostinger VPS via SSH
+
+**Setup:**
+1. Configure GitHub Secrets (see `.github/workflows/README.md` for details):
+   - `DOCKERHUB_USERNAME`: Your Docker Hub username
+   - `DOCKERHUB_TOKEN`: Docker Hub access token
+   - `VPS_HOST`: Your VPS IP address
+   - `VPS_USERNAME`: SSH username
+   - `VPS_SSH_KEY`: Private SSH key for VPS access
+   - `VPS_PORT`: SSH port (optional, defaults to 22)
+   - `VPS_APP_PATH`: Application path on VPS (optional, defaults to `~/ict_agent`)
+
+2. Ensure `docker-compose.prod.yml` exists on your VPS
+
+3. Push to `main` branch to trigger automatic deployment
+
+See `.github/workflows/README.md` for detailed setup instructions.
+
 ### Nginx Proxy Setup
 
 The application is configured to work behind an nginx reverse proxy. See `docs/NGINX_SETUP.md` for detailed nginx configuration.
