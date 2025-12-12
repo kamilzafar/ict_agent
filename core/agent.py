@@ -29,7 +29,7 @@ class IntelligentChatAgent:
     
     def __init__(
         self,
-        model_name: str = "gpt-4o",  # Changed to gpt-4o for 128k context window
+        model_name: str = "gpt-4.1-mini",  # Changed to gpt-4.1-mini for 128k context window
         temperature: float = 0.7,
         memory_db_path: str = "./memory_db",
         summarize_interval: int = 10
@@ -199,7 +199,7 @@ You help leads with course enrollment through WhatsApp conversations."""
         
         # Prepare messages with system prompt
         # Only include system prompt if it's not already in the messages
-        # Limit conversation history to prevent context overflow (gpt-4o has 128k, but be safe)
+        # Limit conversation history to prevent context overflow (gpt-4.1-mini has 128k, but be safe)
         agent_messages = [system_message]
         
         # Limit to last 30 messages to manage context (with 128k tokens, this should be safe)

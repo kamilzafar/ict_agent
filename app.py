@@ -46,11 +46,15 @@ def verify_api_key(api_key: Optional[str] = Security(API_KEY_HEADER)) -> bool:
     """
     expected_api_key = os.getenv("API_KEY")
     
-    # If API_KEY is not set in env, allow all requests (for development)
+    # API_KEY must be set in environment
     if not expected_api_key:
-        logger.warning("API_KEY not set in environment. All requests will be allowed.")
-        return True
+        logger.error("API_KEY not set in environment. API protection is disabled. Please set API_KEY environment variable.")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="API key authentication is not configured. Please set API_KEY environment variable.",
+        )
     
+    # API key must be provided in request
     if not api_key:
         logger.warning("API key missing from request")
         raise HTTPException(
@@ -59,8 +63,9 @@ def verify_api_key(api_key: Optional[str] = Security(API_KEY_HEADER)) -> bool:
             headers={"WWW-Authenticate": "ApiKey"},
         )
     
+    # Validate API key
     if api_key != expected_api_key:
-        logger.warning(f"Invalid API key attempted: {api_key[:10]}...")
+        logger.warning(f"Invalid API key attempted: {api_key[:10] if len(api_key) > 10 else '***'}...")
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Invalid API key",
@@ -83,6 +88,11 @@ async def lifespan(app: FastAPI):
         error_msg = "OPENAI_API_KEY environment variable is not set"
         logger.error(error_msg)
         raise ValueError(error_msg)
+    
+    # Check for API_KEY (required for API protection)
+    if not os.getenv("API_KEY"):
+        logger.warning("API_KEY environment variable is not set. API endpoints will be protected but will fail until API_KEY is configured.")
+        logger.warning("Please set API_KEY environment variable to enable API authentication.")
     
     try:
         agent = IntelligentChatAgent(
