@@ -5,12 +5,14 @@ from contextlib import asynccontextmanager
 from typing import Optional, List, Dict, Any
 from datetime import datetime
 
-from fastapi import FastAPI, HTTPException, status, Request
+from fastapi import FastAPI, HTTPException, status, Request, Header, Depends, Security
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from fastapi.security import APIKeyHeader
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 from pydantic import BaseModel, Field, field_validator
 from dotenv import load_dotenv
+from typing import Optional, List, Dict, Any
 
 from core.agent import IntelligentChatAgent
 
@@ -26,6 +28,46 @@ logger = logging.getLogger(__name__)
 
 # Global agent instance
 agent: Optional[IntelligentChatAgent] = None
+
+# API Key Security
+API_KEY_HEADER = APIKeyHeader(name="X-API-Key", auto_error=False)
+
+def verify_api_key(api_key: Optional[str] = Security(API_KEY_HEADER)) -> bool:
+    """Verify API key from request header.
+    
+    Args:
+        api_key: API key from X-API-Key header
+        
+    Returns:
+        True if API key is valid
+        
+    Raises:
+        HTTPException: If API key is missing or invalid
+    """
+    expected_api_key = os.getenv("API_KEY")
+    
+    # If API_KEY is not set in env, allow all requests (for development)
+    if not expected_api_key:
+        logger.warning("API_KEY not set in environment. All requests will be allowed.")
+        return True
+    
+    if not api_key:
+        logger.warning("API key missing from request")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="API key is required. Please provide X-API-Key header.",
+            headers={"WWW-Authenticate": "ApiKey"},
+        )
+    
+    if api_key != expected_api_key:
+        logger.warning(f"Invalid API key attempted: {api_key[:10]}...")
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Invalid API key",
+            headers={"WWW-Authenticate": "ApiKey"},
+        )
+    
+    return True
 
 
 @asynccontextmanager
@@ -185,7 +227,7 @@ async def health_check():
     )
 
 
-@app.post("/chat", tags=["Chat"], response_model=ChatResponse)
+@app.post("/chat", tags=["Chat"], response_model=ChatResponse, dependencies=[Depends(verify_api_key)])
 async def chat(request: ChatRequest):
     """Send a message to the agent and get a response.
     
@@ -238,7 +280,7 @@ async def chat(request: ChatRequest):
         )
 
 
-@app.get("/conversations/{conversation_id}", tags=["Conversations"], response_model=ConversationHistory)
+@app.get("/conversations/{conversation_id}", tags=["Conversations"], response_model=ConversationHistory, dependencies=[Depends(verify_api_key)])
 async def get_conversation_history(conversation_id: str, limit: Optional[int] = None):
     """Get conversation history for a specific conversation ID.
     
@@ -304,7 +346,7 @@ async def get_conversation_history(conversation_id: str, limit: Optional[int] = 
         )
 
 
-@app.get("/conversations", tags=["Conversations"], response_model=ConversationListResponse)
+@app.get("/conversations", tags=["Conversations"], response_model=ConversationListResponse, dependencies=[Depends(verify_api_key)])
 async def list_conversations(limit: Optional[int] = 50):
     """List all conversations.
     
@@ -354,7 +396,7 @@ async def list_conversations(limit: Optional[int] = 50):
         )
 
 
-@app.get("/conversations/{conversation_id}/summary", tags=["Conversations"])
+@app.get("/conversations/{conversation_id}/summary", tags=["Conversations"], dependencies=[Depends(verify_api_key)])
 async def get_conversation_summary(conversation_id: str):
     """Get the summary for a specific conversation.
     
@@ -396,7 +438,7 @@ async def get_conversation_summary(conversation_id: str):
         )
 
 
-@app.post("/conversations/{conversation_id}/search", tags=["Conversations"])
+@app.post("/conversations/{conversation_id}/search", tags=["Conversations"], dependencies=[Depends(verify_api_key)])
 async def search_conversation_context(
     conversation_id: str,
     query: str,

@@ -54,6 +54,9 @@ A production-ready intelligent chat agent API built with LangGraph and FastAPI t
 Edit `.env` file to configure:
 
 - `OPENAI_API_KEY`: Your OpenAI API key (required for GPT models)
+- `API_KEY`: Static API key for securing endpoints (optional, but recommended for production)
+  - If not set, all endpoints are accessible (development mode)
+  - If set, protected endpoints require `X-API-Key` header
 - `MODEL_NAME`: Model to use (default: `gpt-4o`)
 - `TEMPERATURE`: LLM temperature (default: `0.7`)
 - `MEMORY_DB_PATH`: Path to store the memory database (default: `./memory_db`)
@@ -76,15 +79,18 @@ The API will be available at `http://localhost:8009` with interactive documentat
 
 #### API Endpoints
 
-**POST `/chat`** - Send a message to the agent
+**POST `/chat`** - Send a message to the agent (Protected - requires API key)
 ```bash
 curl -X POST "http://localhost:8009/chat" \
   -H "Content-Type: application/json" \
+  -H "X-API-Key: your-api-key-here" \
   -d '{
     "message": "Hello! My name is Alice.",
     "conversation_id": null
   }'
 ```
+
+**Note:** If `API_KEY` is set in environment, you must include the `X-API-Key` header.
 
 Response:
 ```json
@@ -97,39 +103,59 @@ Response:
 }
 ```
 
-**GET `/conversations/{conversation_id}`** - Get conversation history
+**GET `/conversations/{conversation_id}`** - Get conversation history (Protected)
 ```bash
-curl "http://localhost:8009/conversations/{conversation_id}"
+curl "http://localhost:8009/conversations/{conversation_id}" \
+  -H "X-API-Key: your-api-key-here"
 ```
 
-**GET `/conversations`** - List all conversations
+**GET `/conversations`** - List all conversations (Protected)
 ```bash
-curl "http://localhost:8009/conversations?limit=10"
+curl "http://localhost:8009/conversations?limit=10" \
+  -H "X-API-Key: your-api-key-here"
 ```
 
-**GET `/conversations/{conversation_id}/summary`** - Get conversation summary
+**GET `/conversations/{conversation_id}/summary`** - Get conversation summary (Protected)
 ```bash
-curl "http://localhost:8009/conversations/{conversation_id}/summary"
+curl "http://localhost:8009/conversations/{conversation_id}/summary" \
+  -H "X-API-Key: your-api-key-here"
 ```
 
-**POST `/conversations/{conversation_id}/search`** - Search conversation context
+**POST `/conversations/{conversation_id}/search`** - Search conversation context (Protected)
 ```bash
-curl -X POST "http://localhost:8009/conversations/{conversation_id}/search?query=python&k=5"
+curl -X POST "http://localhost:8009/conversations/{conversation_id}/search?query=python&k=5" \
+  -H "X-API-Key: your-api-key-here"
 ```
 
-**GET `/health`** - Health check
+**GET `/health`** - Health check (Public - no API key required)
 ```bash
 curl "http://localhost:8009/health"
+```
+
+**GET `/`** - Root endpoint (Public - no API key required)
+```bash
+curl "http://localhost:8009/"
 ```
 
 #### Python Client Example
 
 ```python
 import requests
+import os
+
+# API key (set in environment or use directly)
+API_KEY = os.getenv("API_KEY", "your-api-key-here")
+
+# Headers with API key
+headers = {
+    "Content-Type": "application/json",
+    "X-API-Key": API_KEY
+}
 
 # Send a message
 response = requests.post(
     "http://localhost:8009/chat",
+    headers=headers,
     json={
         "message": "Hello! My name is Alice.",
         "conversation_id": None
@@ -142,6 +168,7 @@ print(f"Conversation ID: {data['conversation_id']}")
 # Continue conversation
 response = requests.post(
     "http://localhost:8009/chat",
+    headers=headers,
     json={
         "message": "What's my name?",
         "conversation_id": data['conversation_id']

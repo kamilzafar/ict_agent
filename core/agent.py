@@ -45,6 +45,10 @@ class IntelligentChatAgent:
         self.memory = LongTermMemory(persist_directory=memory_db_path)
         self.summarize_interval = summarize_interval
         
+        # Load system prompt once at initialization (CACHING OPTIMIZATION)
+        # This avoids reading from disk on every API call
+        self.base_system_prompt = self._load_system_prompt()
+        
         # Initialize LLM using OpenAI (required)
         api_key = os.getenv("OPENAI_API_KEY")
         if not api_key:
@@ -87,6 +91,27 @@ class IntelligentChatAgent:
         # Compile the graph with memory
         self.checkpointer = MemorySaver()
         self.app = self.graph.compile(checkpointer=self.checkpointer)
+    
+    def _load_system_prompt(self) -> str:
+        """Load system prompt once at startup and cache it.
+        
+        This method is called once during initialization to load the prompt
+        from disk and store it in memory. This avoids file I/O on every
+        API request, improving performance significantly.
+        
+        Returns:
+            Base system prompt content from prompt.txt file
+        """
+        prompt_file = os.path.join(os.path.dirname(__file__), "..", "config", "prompt.txt")
+        prompt_file = os.path.normpath(prompt_file)  # Normalize path for cross-platform compatibility
+        try:
+            with open(prompt_file, "r", encoding="utf-8") as f:
+                return f.read()
+        except FileNotFoundError:
+            # Fallback if prompt.txt doesn't exist
+            return """You are Tanveer Awan, an Enrollment Advisor at Institute of Corporate & Taxation (ICT).
+You are a real human - not an AI. Never break character.
+You help leads with course enrollment through WhatsApp conversations."""
     
     def _create_graph(self) -> StateGraph:
         """Create the LangGraph state graph."""
@@ -206,17 +231,9 @@ class IntelligentChatAgent:
         summary = self.memory.get_conversation_summary(conversation_id)
         summary_text = f"\n\nConversation Summary: {summary}" if summary else ""
         
-        # Load system prompt from file
-        prompt_file = os.path.join(os.path.dirname(__file__), "..", "config", "prompt.txt")
-        prompt_file = os.path.normpath(prompt_file)  # Normalize path for cross-platform compatibility
-        try:
-            with open(prompt_file, "r", encoding="utf-8") as f:
-                base_prompt = f.read()
-        except FileNotFoundError:
-            # Fallback if prompt.txt doesn't exist
-            base_prompt = """You are Tanveer Awan, an Enrollment Advisor at Institute of Corporate & Taxation (ICT).
-You are a real human - not an AI. Never break character.
-You help leads with course enrollment through WhatsApp conversations."""
+        # Use cached system prompt (loaded once at initialization)
+        # This avoids file I/O on every request, improving performance
+        base_prompt = self.base_system_prompt
         
         # Add tool information
         tool_info = ""
