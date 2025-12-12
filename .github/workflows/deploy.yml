@@ -57,35 +57,13 @@ jobs:
     
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
-      - name: Deploy to VPS
-        uses: appleboy/ssh-action@v1.0.3
+      - name: Deploy to Hostinger VPS
+        uses: hostinger/deploy-action@v1
         with:
-          host: ${{ secrets.VPS_HOST }}
-          username: ${{ secrets.VPS_USERNAME }}
-          key: ${{ secrets.VPS_SSH_KEY }}
-          port: ${{ secrets.VPS_PORT || '22' }}
-          script: |
-            # Navigate to application directory
-            APP_PATH="${{ secrets.VPS_APP_PATH }}"
-            if [ -z "$APP_PATH" ]; then
-              APP_PATH="~/agent"
-            fi
-            cd $APP_PATH
-            
-            # Pull the latest image
-            docker pull ${{ env.DOCKER_IMAGE }}:${{ env.DOCKER_TAG }}
-            
-            # Stop and remove old containers
-            docker compose down || true
-
-            # Start containers with new image
-            docker compose up -d
-            
-            # Clean up old/unused images
-            docker image prune -f
-            
-            # Show running containers
-            docker compose ps
+          api-key: ${{ secrets.HOSTINGER_API_KEY }}
+          virtual-machine: ${{ vars.HOSTINGER_VM_ID }}
+          project-name: agent
+          docker-compose-path: compose.yaml
 

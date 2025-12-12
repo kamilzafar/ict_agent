@@ -197,23 +197,31 @@ See `docs/DOCKER_PRODUCTION.md` for detailed production deployment guide.
 The repository includes an automated CI/CD pipeline that:
 1. **Builds** Docker image on every push to `main`/`master`
 2. **Pushes** image to Docker Hub (`kamilzafar/ict_agent:latest`)
-3. **Deploys** automatically to Hostinger VPS via SSH
+3. **Deploys** automatically to Hostinger VPS using Hostinger's official action
 
 **Setup:**
-1. Configure GitHub Secrets (see `.github/workflows/README.md` for details):
-   - `DOCKERHUB_USERNAME`: Your Docker Hub username
-   - `DOCKERHUB_TOKEN`: Docker Hub access token
-   - `VPS_HOST`: Your VPS IP address
-   - `VPS_USERNAME`: SSH username
-   - `VPS_SSH_KEY`: Private SSH key for VPS access
-   - `VPS_PORT`: SSH port (optional, defaults to 22)
-   - `VPS_APP_PATH`: Application path on VPS (optional, defaults to `~/ict_agent`)
+1. Configure GitHub Secrets and Variables:
+   - **Secrets** (Settings → Secrets and variables → Actions → Secrets):
+     - `HOSTINGER_API_KEY`: Your Hostinger API key (from hPanel → API settings)
+     - `DOCKERHUB_USERNAME`: Your Docker Hub username
+     - `DOCKERHUB_TOKEN`: Docker Hub access token
+   - **Variables** (Settings → Secrets and variables → Actions → Variables):
+     - `HOSTINGER_VM_ID`: Your VPS Virtual Machine ID (e.g., `123456` from `srv123456.hstgr.cloud`)
 
-2. Ensure `docker-compose.prod.yml` exists on your VPS
+2. Configure environment variables on your Hostinger VPS:
+   - Via hPanel → Docker Manager → Environment Variables
+   - Or via SSH terminal → edit `.env` file or `docker-compose.prod.yml`
 
-3. Push to `main` branch to trigger automatic deployment
+3. Ensure `docker-compose.prod.yml` exists in your repository root
 
-See `.github/workflows/README.md` for detailed setup instructions.
+4. Push to `main` branch to trigger automatic deployment
+
+**Benefits:**
+- ✅ No SSH keys needed - Uses Hostinger API
+- ✅ Simpler setup - Just API key and VM ID
+- ✅ Automatic deployment management
+
+See `.github/workflows/HOSTINGER_SETUP.md` for detailed setup instructions.
 
 ### Nginx Proxy Setup
 
