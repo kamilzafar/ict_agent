@@ -17,7 +17,7 @@ COPY core/ ./core/
 COPY tools/ ./tools/
 COPY config/ ./config/
 COPY scripts/ ./scripts/
-COPY credentials.json ./
+COPY credential.json ./
 
 # Set environment variables
 ENV PYTHONUNBUFFERED=1
