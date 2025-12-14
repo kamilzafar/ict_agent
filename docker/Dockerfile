@@ -16,9 +16,9 @@ RUN chmod +x /usr/local/bin/uv
 COPY pyproject.toml uv.lock ./
 
 # Install dependencies in virtual environment
-RUN uv venv /opt/venv && \
-    . /opt/venv/bin/activate && \
-    uv sync --frozen --no-dev
+RUN uv venv /opt/venv
+ENV VIRTUAL_ENV=/opt/venv PATH="/opt/venv/bin:$PATH"
+RUN uv sync --frozen --no-dev
 
 # Production stage
 FROM python:3.13-slim
