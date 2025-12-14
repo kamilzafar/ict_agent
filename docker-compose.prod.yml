@@ -1,7 +1,35 @@
 version: '3.8'
 
 services:
+  redis:
+    image: redis:7-alpine
+    container_name: ict_agent_redis
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    command: redis-server --requirepass ${REDIS_PASSWORD:-} --appendonly yes --maxmemory 512mb --maxmemory-policy allkeys-lru
+    volumes:
+      - redis_data:/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - ict_agent_network
+    deploy:
+      resources:
+        limits:
+          cpus: '1'
+          memory: 512M
+        reservations:
+          cpus: '0.5'
+          memory: 256M
+
   api:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
     image: kamilzafar/ict_agent:latest
     container_name: ict_agent_api
     ports:
@@ -9,10 +37,27 @@ services:
     environment:
       # Required API Keys
       - OPENAI_API_KEY=${OPENAI_API_KEY}
-      - PINECONE_API_KEY=${PINECONE_API_KEY}
+      - API_KEY=${API_KEY}
+      
+      # Google Sheets Configuration
+      - GOOGLE_SHEETS_CREDENTIALS_PATH=${GOOGLE_SHEETS_CREDENTIALS_PATH:-/app/credentials/google-sheets-service-account.json}
+      - GOOGLE_SHEETS_SPREADSHEET_ID=${GOOGLE_SHEETS_SPREADSHEET_ID}
+      - GOOGLE_SHEETS_SHEET_NAMES=${GOOGLE_SHEETS_SHEET_NAMES:-Course_Details,Course_Links,FAQs,About_Profr,Company_Info}
+      - SHEETS_WEBHOOK_ENABLED=${SHEETS_WEBHOOK_ENABLED:-true}
+      - SHEETS_WEBHOOK_SECRET=${SHEETS_WEBHOOK_SECRET}
+      - SHEETS_FALLBACK_POLL_ENABLED=${SHEETS_FALLBACK_POLL_ENABLED:-true}
+      - SHEETS_FALLBACK_POLL_INTERVAL=${SHEETS_FALLBACK_POLL_INTERVAL:-86400}
+      
+      # Redis Configuration
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - REDIS_PASSWORD=${REDIS_PASSWORD:-}
+      - REDIS_DB=${REDIS_DB:-0}
+      
+      # ChromaDB Configuration
+      - CHROMA_DB_PATH=/app/sheets_index_db
       
       # Optional Configuration
-      - PINECONE_INDEX_NAME=${PINECONE_INDEX_NAME:-coursedetails}
       - MODEL_NAME=${MODEL_NAME:-gpt-4o}
       - TEMPERATURE=${TEMPERATURE:-0.7}
       
@@ -47,16 +92,24 @@ services:
     volumes:
       # Persist memory database
       - ./memory_db:/app/memory_db
-      # Optional: Mount logs directory if needed
-      # - ./logs:/app/logs
+      # Persist ChromaDB index
+      - ./sheets_index_db:/app/sheets_index_db
+      # Mount Google Sheets credentials (if using file-based auth)
+      - ${GOOGLE_SHEETS_CREDENTIALS_PATH:-./credentials/google-sheets-service-account.json}:/app/credentials/google-sheets-service-account.json:ro
+      # Optional: Mount logs directory
+      - ./logs:/app/logs
+    
+    depends_on:
+      redis:
+        condition: service_healthy
     
     restart: unless-stopped
     
     # Health check
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8009/health"]
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8009/health')"]
       interval: 30s
-      timeout: 120s
+      timeout: 10s
       retries: 3
       start_period: 40s
     
@@ -76,4 +129,14 @@ services:
       options:
         max-size: "10m"
         max-file: "3"
+    
+    networks:
+      - ict_agent_network
 
+volumes:
+  redis_data:
+    driver: local
+
+networks:
+  ict_agent_network:
+    driver: bridge

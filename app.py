@@ -1,6 +1,8 @@
 """FastAPI application for the intelligent chat agent."""
 import os
 import logging
+import asyncio
+import sys
 from contextlib import asynccontextmanager
 from typing import Optional, List, Dict, Any
 from datetime import datetime
@@ -12,22 +14,30 @@ from fastapi.security import APIKeyHeader
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 from pydantic import BaseModel, Field, field_validator
 from dotenv import load_dotenv
-from typing import Optional, List, Dict, Any
 
 from core.agent import IntelligentChatAgent
+from core.sheets_cache import GoogleSheetsCacheService
+from core.background_tasks import fallback_polling_task
 
 # Load environment variables
 load_dotenv()
 
-# Configure logging
+# Configure logging with production-ready settings
+log_level = os.getenv("LOG_LEVEL", "INFO").upper()
 logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+    level=getattr(logging, log_level, logging.INFO),
+    format="%(asctime)s - %(name)s - %(levelname)s - [%(filename)s:%(lineno)d] - %(message)s",
+    handlers=[
+        logging.StreamHandler(sys.stdout),
+    ]
 )
 logger = logging.getLogger(__name__)
 
 # Global agent instance
 agent: Optional[IntelligentChatAgent] = None
+
+# Global cache service instance
+sheets_cache_service: Optional[GoogleSheetsCacheService] = None
 
 # API Key Security
 API_KEY_HEADER = APIKeyHeader(name="X-API-Key", auto_error=False)
@@ -78,7 +88,7 @@ def verify_api_key(api_key: Optional[str] = Security(API_KEY_HEADER)) -> bool:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Lifespan context manager for FastAPI app."""
-    global agent
+    global agent, sheets_cache_service
     
     # Startup: Initialize agent
     logger.info("Initializing AI agent...")
@@ -94,12 +104,44 @@ async def lifespan(app: FastAPI):
         logger.warning("API_KEY environment variable is not set. API endpoints will be protected but will fail until API_KEY is configured.")
         logger.warning("Please set API_KEY environment variable to enable API authentication.")
     
+    # Initialize Google Sheets cache service (if configured)
+    polling_task = None
+    try:
+        if os.getenv("GOOGLE_SHEETS_CREDENTIALS_PATH") and os.getenv("GOOGLE_SHEETS_SPREADSHEET_ID"):
+            logger.info("Initializing Google Sheets cache service...")
+            sheets_cache_service = GoogleSheetsCacheService(
+                redis_host=os.getenv("REDIS_HOST", "localhost"),
+                redis_port=int(os.getenv("REDIS_PORT", "6379")),
+                redis_password=os.getenv("REDIS_PASSWORD"),
+                redis_db=int(os.getenv("REDIS_DB", "0")),
+                chroma_db_path=os.getenv("CHROMA_DB_PATH", "./sheets_index_db")
+            )
+            
+            # Pre-load all sheets on startup
+            logger.info("Pre-loading Google Sheets data...")
+            try:
+                sheets_cache_service.preload_all_sheets()
+                logger.info("Google Sheets cache initialized successfully")
+            except Exception as e:
+                logger.error(f"Error pre-loading sheets: {e}")
+                logger.warning("Continuing without pre-loaded sheets - will retry on first webhook")
+            
+            # Start fallback polling task
+            polling_task = asyncio.create_task(fallback_polling_task(sheets_cache_service))
+            logger.info("Background polling task started")
+        else:
+            logger.warning("Google Sheets not configured - skipping cache service initialization")
+    except Exception as e:
+        logger.error(f"Error initializing Google Sheets cache service: {e}", exc_info=True)
+        logger.warning("Continuing without Google Sheets cache - agent will work but without sheet data")
+    
     try:
         agent = IntelligentChatAgent(
             model_name=os.getenv("MODEL_NAME", "gpt-4o"),  # Default to gpt-4o for large context
             temperature=float(os.getenv("TEMPERATURE", "0.7")),
             memory_db_path=os.getenv("MEMORY_DB_PATH", "./memory_db"),
-            summarize_interval=int(os.getenv("SUMMARIZE_INTERVAL", "10"))
+            summarize_interval=int(os.getenv("SUMMARIZE_INTERVAL", "10")),
+            sheets_cache_service=sheets_cache_service
         )
         logger.info("Agent initialized successfully")
         logger.info(f"Model: {os.getenv('MODEL_NAME', 'gpt-4o')}")
@@ -113,8 +155,14 @@ async def lifespan(app: FastAPI):
     
     yield
     
-    # Shutdown: Cleanup if needed
-    print("Shutting down...")
+    # Shutdown: Cleanup
+    if polling_task:
+        polling_task.cancel()
+        try:
+            await polling_task
+        except asyncio.CancelledError:
+            pass
+    logger.info("Shutting down...")
 
 
 # Create FastAPI app
@@ -215,6 +263,9 @@ class HealthResponse(BaseModel):
     status: str
     agent_initialized: bool
     memory_db_path: str
+    sheets_cache_initialized: bool = False
+    redis_connected: bool = False
+    version: str = "1.0.0"
 
 
 # Routes
@@ -231,11 +282,22 @@ async def root():
 
 @app.get("/health", tags=["Health"], response_model=HealthResponse)
 async def health_check():
-    """Health check endpoint."""
+    """Health check endpoint with comprehensive status."""
+    redis_connected = False
+    if sheets_cache_service and sheets_cache_service.redis_client:
+        try:
+            sheets_cache_service.redis_client.ping()
+            redis_connected = True
+        except Exception:
+            redis_connected = False
+    
     return HealthResponse(
-        status="healthy",
+        status="healthy" if agent is not None else "degraded",
         agent_initialized=agent is not None,
-        memory_db_path=os.getenv("MEMORY_DB_PATH", "./memory_db")
+        memory_db_path=os.getenv("MEMORY_DB_PATH", "./memory_db"),
+        sheets_cache_initialized=sheets_cache_service is not None,
+        redis_connected=redis_connected,
+        version="1.0.0"
     )
 
 
@@ -651,6 +713,99 @@ async def get_conversation_stage(conversation_id: str):
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Error retrieving stage: {str(e)}"
         )
+
+
+# Webhook Models
+class WebhookPayload(BaseModel):
+    """Payload model for Google Sheets webhook."""
+    spreadsheet_id: str = Field(..., description="Google Sheets spreadsheet ID")
+    sheet_name: str = Field(..., description="Name of the sheet that was updated")
+    action: str = Field(default="updated", description="Action type (updated, form_submitted, manual_sync)")
+    timestamp: Optional[str] = Field(None, description="Timestamp of the update")
+
+
+@app.post("/webhooks/google-sheets-update", tags=["Webhooks"])
+async def google_sheets_webhook(
+    payload: WebhookPayload,
+    request: Request,
+    x_webhook_secret: Optional[str] = Header(None, alias="X-Webhook-Secret")
+):
+    """Webhook endpoint for real-time Google Sheets updates.
+    
+    This is the PRIMARY sync mechanism - updates happen instantly when
+    sheets are modified via Google Apps Script trigger.
+    
+    Args:
+        payload: Webhook payload with sheet information
+        request: FastAPI request object
+        x_webhook_secret: Webhook secret from header
+    
+    Returns:
+        Status of the update operation
+    """
+    # Check if webhook is enabled
+    webhook_enabled = os.getenv("SHEETS_WEBHOOK_ENABLED", "true").lower() == "true"
+    if not webhook_enabled:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Webhook endpoint is disabled"
+        )
+    
+    # Verify webhook secret
+    expected_secret = os.getenv("SHEETS_WEBHOOK_SECRET")
+    if not expected_secret:
+        logger.error("SHEETS_WEBHOOK_SECRET not configured")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Webhook not configured"
+        )
+    
+    if not x_webhook_secret or x_webhook_secret != expected_secret:
+        logger.warning(f"Invalid webhook secret attempt from {request.client.host if request.client else 'unknown'}")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Unauthorized"
+        )
+    
+    # Check if cache service is initialized
+    if sheets_cache_service is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Google Sheets cache service not initialized"
+        )
+    
+    try:
+        logger.info(f"Webhook received: {payload.sheet_name} updated (action: {payload.action})")
+        
+        # Immediately sync the sheet
+        updated = sheets_cache_service.sync_sheet(payload.sheet_name)
+        
+        if updated:
+            logger.info(f"Successfully updated cache for {payload.sheet_name}")
+            return {
+                "status": "success",
+                "sheet": payload.sheet_name,
+                "updated": True,
+                "message": "Cache refreshed successfully"
+            }
+        else:
+            logger.info(f"No changes detected for {payload.sheet_name}")
+            return {
+                "status": "success",
+                "sheet": payload.sheet_name,
+                "updated": False,
+                "message": "No changes detected"
+            }
+    
+    except Exception as e:
+        logger.error(f"Error processing webhook: {e}", exc_info=True)
+        # Return 200 to prevent retries for permanent errors
+        # But log the error for investigation
+        return {
+            "status": "error",
+            "message": str(e),
+            "sheet": payload.sheet_name
+        }
 
 
 if __name__ == "__main__":

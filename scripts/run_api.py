@@ -2,6 +2,7 @@
 import os
 import sys
 import socket
+import logging
 import uvicorn
 from pathlib import Path
 from dotenv import load_dotenv
@@ -12,6 +13,13 @@ sys.path.insert(0, str(project_root))
 
 # Load environment variables
 load_dotenv()
+
+# Configure logging early
+logging.basicConfig(
+    level=os.getenv("LOG_LEVEL", "INFO").upper(),
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+)
+logger = logging.getLogger(__name__)
 
 
 def is_port_available(host: str, port: int) -> bool:
@@ -66,6 +74,9 @@ if __name__ == "__main__":
         max_concurrent = int(os.getenv("MAX_CONCURRENT", "100"))
         keep_alive = int(os.getenv("KEEP_ALIVE", "120"))  # Keep-alive timeout (2 minutes)
         timeout = int(os.getenv("TIMEOUT", "120"))  # Request timeout in seconds (2 minutes)
+        backlog = int(os.getenv("BACKLOG", "2048"))  # Socket backlog
+        
+        logger.info(f"Starting server with {workers} worker(s), max_concurrent={max_concurrent}")
         
         uvicorn.run(
             "app:app",
@@ -79,6 +90,8 @@ if __name__ == "__main__":
             limit_concurrency=max_concurrent,  # Max concurrent connections
             timeout_keep_alive=keep_alive,  # Keep-alive timeout (2 minutes)
             timeout_graceful_shutdown=timeout,  # Graceful shutdown timeout (2 minutes)
+            backlog=backlog,  # Socket backlog for better connection handling
+            server_header=False,  # Security: Don't expose server version
         )
     except OSError as e:
         if "10048" in str(e) or "address already in use" in str(e).lower():

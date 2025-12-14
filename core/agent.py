@@ -2,8 +2,11 @@
 import os
 import re
 import uuid
-from typing import Annotated, TypedDict, List, Dict, Any, Optional
+from typing import Annotated, TypedDict, List, Dict, Any, Optional, TYPE_CHECKING
 from datetime import datetime
+
+if TYPE_CHECKING:
+    from core.sheets_cache import GoogleSheetsCacheService
 
 from langchain_core.messages import BaseMessage, HumanMessage, AIMessage, SystemMessage
 from langchain_openai import ChatOpenAI
@@ -13,8 +16,8 @@ from langgraph.prebuilt import ToolNode
 from langgraph.checkpoint.memory import MemorySaver
 
 from core.memory import LongTermMemory
-from tools.pinecone_tools import get_pinecone_tools
 from tools.mcp_rag_tools import get_mcp_rag_tools
+from core.context_injector import ContextInjector
 
 
 class AgentState(TypedDict):
@@ -33,7 +36,8 @@ class IntelligentChatAgent:
         model_name: str = "gpt-4.1-mini",  # Changed to gpt-4.1-mini for 128k context window
         temperature: float = 0.7,
         memory_db_path: str = "./memory_db",
-        summarize_interval: int = 10
+        summarize_interval: int = 10,
+        sheets_cache_service: Optional[Any] = None
     ):
         """Initialize the agent.
         
@@ -42,9 +46,15 @@ class IntelligentChatAgent:
             temperature: Temperature for the LLM
             memory_db_path: Path to the memory database
             summarize_interval: Number of turns before summarizing
+            sheets_cache_service: Optional Google Sheets cache service instance
         """
         self.memory = LongTermMemory(persist_directory=memory_db_path)
         self.summarize_interval = summarize_interval
+        
+        # Initialize context injector if cache service is provided
+        self.context_injector = None
+        if sheets_cache_service:
+            self.context_injector = ContextInjector(sheets_cache_service)
         
         # Load system prompt once at initialization (CACHING OPTIMIZATION)
         # This avoids reading from disk on every API call
@@ -70,12 +80,11 @@ class IntelligentChatAgent:
                 "Please check your OPENAI_API_KEY is valid and the model name is correct."
             ) from e
         
-        # Get all available tools
-        self.pinecone_tools = get_pinecone_tools()
+        # Get available tools (only MCP RAG tools now - no Pinecone)
         self.mcp_rag_tools = get_mcp_rag_tools()
         
         # Combine all tools
-        all_tools = self.pinecone_tools + self.mcp_rag_tools
+        all_tools = self.mcp_rag_tools
         
         # Bind tools to LLM if available
         if all_tools:
@@ -254,8 +263,6 @@ You help leads with course enrollment through WhatsApp conversations."""
         tool_info = ""
         if self.all_tools:
             tool_descriptions = []
-            if self.pinecone_tools:
-                tool_descriptions.append("a vector database search tool (search_vector_database) - Use this to retrieve information from Google Sheets or knowledge base when you need course data, links, fees, dates, professor info, FAQs, or any information")
             if self.mcp_rag_tools:
                 tool_descriptions.append("a tool to append lead data to RAG sheets (append_lead_to_rag_sheets) - Use this to save lead information when collecting data or before sharing demo video link")
             
@@ -263,8 +270,25 @@ You help leads with course enrollment through WhatsApp conversations."""
                 tool_info = f"\n\n## AVAILABLE TOOLS:\n\nYou have access to the following tools:\n"
                 for desc in tool_descriptions:
                     tool_info += f"- {desc}\n"
-                tool_info += "\nIMPORTANT: Always use the search_vector_database tool to fetch data from Google Sheets before sharing any course information, links, fees, dates, or other data.\n"
-                tool_info += "Use append_lead_to_rag_sheets tool to save lead data before sharing demo video link (Step 6).\n"
+                tool_info += "\nUse append_lead_to_rag_sheets tool to save lead data before sharing demo video link (Step 6).\n"
+        
+        # Add Google Sheets context injection (proactive - no tool calls needed)
+        sheets_context = ""
+        if self.context_injector:
+            # Get current stage and selected course
+            current_stage = self.memory.get_stage(conversation_id)
+            lead_data = self.memory.get_lead_data(conversation_id)
+            selected_course = lead_data.get("selected_course")
+            
+            # Inject stage-based context
+            stage_context = self.context_injector.get_stage_context(
+                current_stage,
+                selected_course=selected_course
+            )
+            
+            if stage_context:
+                sheets_context = f"\n\n## RELEVANT GOOGLE SHEETS DATA (Pre-loaded for your reference):\n{stage_context}\n"
+                sheets_context += "NOTE: This data is automatically loaded from Google Sheets cache. You can use this information directly without calling any tools.\n"
         
         # Add conversation context
         context_info = f"""
@@ -275,7 +299,7 @@ You help leads with course enrollment through WhatsApp conversations."""
 """
         
         # Combine prompt with context
-        full_prompt = base_prompt + tool_info + context_info + context_text
+        full_prompt = base_prompt + tool_info + context_info + context_text + sheets_context
         
         return full_prompt
     
