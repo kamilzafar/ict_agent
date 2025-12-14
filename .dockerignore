@@ -44,4 +44,29 @@ workflow_notebook.ipynb
 
 # Memory database (will be mounted as volume)
 memory_db/
+sheets_index_db/
+
+# Credentials - allow credential.json to be copied (required for deployment)
+# Other sensitive files should be excluded
+credentials.json
+credentials/
+*.pem
+*.key
+*.crt
+# Note: credential.json is NOT ignored - it will be copied into the image
+
+# Git
+.git/
+.gitignore
+.gitattributes
+
+# Docker
+docker-compose*.yml
+Dockerfile*
+.dockerignore
+
+# CI/CD
+.github/
+.gitlab-ci.yml
+.travis.yml
 
