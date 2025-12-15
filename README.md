@@ -4,7 +4,7 @@
 
 A production-ready intelligent chat agent API built with LangGraph and FastAPI that features:
 - **Long-term memory** using ChromaDB vector store
-- **Vector database search** using Pinecone for knowledge retrieval
+- **Google Sheets integration** for real-time course data, links, FAQs, and company information
 - **Chat summarization** for efficient context management
 - **Conversation persistence** - all conversations are saved and can be retrieved
 - **Production-ready** with Docker support, logging, and error handling
@@ -16,10 +16,10 @@ A production-ready intelligent chat agent API built with LangGraph and FastAPI t
 - Semantic search to retrieve relevant context from past conversations
 - Automatic conversation summarization to maintain context efficiency
 
-### 🔍 Vector Database Search
-- Pinecone integration for knowledge base retrieval
+### 🔍 Google Sheets Integration
+- Real-time data fetching from Google Sheets (Course_Details, Course_Links, FAQs, About_Profr, Company_Info)
 - Automatic tool calling when information retrieval is needed
-- Configurable search parameters (top_k, namespaces)
+- Webhook-based updates for instant data synchronization
 
 ### 💬 Intelligent Chat
 - Context-aware responses using relevant past conversations
@@ -37,7 +37,7 @@ A production-ready intelligent chat agent API built with LangGraph and FastAPI t
    ```bash
    cp .env.example .env
    # Edit .env and add your OpenAI API key (required)
-   # Optionally configure Pinecone, nginx proxy, and other settings
+   # Configure Google Sheets credentials and other settings
    ```
 
 3. **Run the API server:**
@@ -273,7 +273,7 @@ sudo systemctl reload nginx
 The agent uses a LangGraph state graph with the following workflow (see diagram above):
 
 1. **retrieve_context**: Searches long-term memory for relevant context from past conversations
-2. **agent**: Calls the LLM with available tools (Pinecone search, MCP RAG tools)
+2. **agent**: Calls the LLM with available tools (Google Sheets tools, MCP RAG tools)
 3. **tools**: Executes tools if needed (loops back to agent after execution)
 4. **summarize**: Creates conversation summaries periodically (every N turns)
 5. **end**: Completes the conversation
@@ -283,7 +283,8 @@ The agent uses a LangGraph state graph with the following workflow (see diagram 
 - **`app.py`**: FastAPI application with REST API endpoints
 - **`core/agent.py`**: Main LangGraph agent with state management
 - **`core/memory.py`**: Long-term memory system using ChromaDB
-- **`tools/pinecone_tools.py`**: Pinecone vector database search tools
+- **`core/sheets_cache.py`**: Google Sheets caching and semantic search service
+- **`tools/sheets_tools.py`**: Google Sheets data fetching tools
 - **`tools/mcp_rag_tools.py`**: MCP RAG sheets tool for lead capture
 - **`config/prompt.txt`**: System prompt for the agent
 
@@ -303,11 +304,11 @@ ict_agent/
 ├── docker-compose.yml      # Docker Compose configuration
 ├── core/                   # Core agent and memory components
 │   ├── agent.py           # LangGraph agent implementation
-│   └── memory.py          # Long-term memory system
+│   ├── memory.py          # Long-term memory system
+│   └── sheets_cache.py    # Google Sheets caching service
 ├── tools/                  # LangChain tool integrations
-│   ├── pinecone_tools.py  # Pinecone vector database tools
-│   ├── mcp_rag_tools.py   # MCP RAG sheets tool
-│   └── create_pinecone_index.py  # Utility script
+│   ├── sheets_tools.py    # Google Sheets data fetching tools
+│   └── mcp_rag_tools.py   # MCP RAG sheets tool for lead capture
 ├── docker/                 # Docker configuration
 │   └── Dockerfile
 ├── config/                 # Configuration files

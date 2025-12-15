@@ -42,7 +42,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && apt-get clean
 
 # Create non-root user for security
-RUN groupadd -r appuser && useradd -r -g appuser appuser
+RUN groupadd -r appuser && useradd -r -g appuser -m -d /home/appuser appuser
 
 WORKDIR /app
 
@@ -64,33 +64,21 @@ COPY scripts/ ./scripts/
 # Create necessary directories first
 RUN mkdir -p /app/memory_db /app/sheets_index_db /app/logs /app/credentials
 
-# Copy credentials - required for Google Sheets API
-# Copy credential.json from project root (required for deployment)
-COPY credential.json ./
+# Create cache directory for uv with proper permissions
+RUN mkdir -p /home/appuser/.cache/uv && \
+    chown -R appuser:appuser /home/appuser
 
-# Copy credentials directory if it exists (for additional credential files)
-# Note: This will fail if credentials/ doesn't exist, but that's okay - it's optional
-# If you have a credentials/ directory, uncomment the line below:
-# COPY credentials/ ./credentials/
-
-# Organize credentials: ensure credential.json is available in credentials directory
-# This copies the root credential.json to the credentials directory where the app expects it
-RUN if [ -f credential.json ]; then \
-        # Copy to the expected location for Google Sheets service account
-        cp credential.json /app/credentials/google-sheets-service-account.json || true; \
-        # Also keep a copy with original name for backward compatibility
-        cp credential.json /app/credentials/credential.json || true; \
-    fi && \
-    # Ensure credentials directory exists and has proper permissions
-    mkdir -p /app/credentials && \
-    chown -R appuser:appuser /app
+# Credentials are not baked into the image for security.
+# Mount them at runtime (e.g., docker-compose volume) to /app/credentials/google-sheets-service-account.json
+RUN chown -R appuser:appuser /app
 
 # Set environment variables
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     ENVIRONMENT=production \
     PATH="/app/.venv/bin:$PATH" \
-    PYTHONPATH="/app"
+    PYTHONPATH="/app" \
+    UV_CACHE_DIR=/home/appuser/.cache/uv
 
 # Switch to non-root user
 USER appuser

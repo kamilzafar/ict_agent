@@ -1,4 +1,4 @@
-"""MCP RAG Sheets tool for appending leads data."""
+"""MCP RAG Sheets tool for appending leads data and fetching Course_Links."""
 import os
 import json
 from typing import List, Optional, Dict, Any
@@ -34,31 +34,21 @@ def create_mcp_rag_tool():
         notes: Optional[str] = None,
         metadata: Optional[Dict[str, Any]] = None
     ) -> str:
-        """Append a new lead to the RAG sheets via MCP endpoint.
+        """Save lead data to Leads sheet. Use ONLY for saving data, NOT for fetching links or course info.
         
-        CRITICAL: Use this tool RIGHT BEFORE sharing demo video link (Step 6 in conversation flow).
-        This tool saves lead data to the Leads sheet as specified in the system prompt.
-        
-        Required fields to capture:
-        - Lead_Name: From Step 1 (or "None" if not collected)
-        - Selected_Course: From Step 2 (or "None" if not selected)
-        - Education_Level: From Step 3 (or "None" if not collected)
-        - Goal_Motivation: From Step 4 (or "None" if not collected)
-        - Phone_Number: If collected (or "None")
-        - Demo_Shared_Date: Current date and time
-        - Demo_Link_Sent: "Yes"
-        - Conversation_Status: "Demo Shared"
+        Use this tool right before sharing demo video link (Step 6). Do NOT use for fetching data.
+        For links use fetch_course_links, for course info use fetch_course_details.
         
         Args:
-            name: Lead's name (required) - Use "None" if not collected
-            email: Lead's email address (optional)
-            phone: Lead's phone number (optional) - Use "None" if not collected
-            company: Lead's company name (optional)
-            notes: Additional notes about the lead (can include Selected_Course, Education_Level, Goal_Motivation, Demo_Shared_Date, Demo_Link_Sent, Conversation_Status)
-            metadata: Additional metadata as key-value pairs (can include course, education, goal, demo_shared_date, etc.)
+            name: Lead name (required, use "None" if not collected)
+            email: Email address (optional)
+            phone: Phone number (optional, use "None" if not collected)
+            company: Company name (optional)
+            notes: Additional notes (can include Selected_Course, Education_Level, Goal_Motivation, Demo_Shared_Date, Demo_Link_Sent, Conversation_Status)
+            metadata: Additional metadata as key-value pairs
         
         Returns:
-            A confirmation message with the result
+            Confirmation message
         """
         try:
             # Prepare lead data
@@ -93,6 +83,8 @@ def create_mcp_rag_tool():
                 return f"Successfully appended lead '{name}' to RAG sheets. Response: {json.dumps(result, indent=2)}"
         
         except httpx.HTTPStatusError as e:
+            if e.response.status_code == 406:
+                return f"Error: HTTP 406 Not Acceptable. The MCP endpoint rejected the request. This tool is ONLY for saving lead data - if you need to fetch links or course data, use fetch_course_links or fetch_course_details instead."
             return f"Error appending lead: HTTP {e.response.status_code} - {e.response.text}"
         except httpx.RequestError as e:
             return f"Error connecting to MCP endpoint: {str(e)}"
@@ -102,8 +94,11 @@ def create_mcp_rag_tool():
     return append_lead_to_rag_sheets
 
 
-def get_mcp_rag_tools() -> List:
+def get_mcp_rag_tools(sheets_cache_service=None) -> List:
     """Get MCP RAG Sheets tools for the agent.
+    
+    Args:
+        sheets_cache_service: Optional Google Sheets cache service instance
     
     Returns:
         List of MCP RAG tools

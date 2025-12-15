@@ -107,7 +107,16 @@ async def lifespan(app: FastAPI):
     # Initialize Google Sheets cache service (if configured)
     polling_task = None
     try:
-        if os.getenv("GOOGLE_SHEETS_CREDENTIALS_PATH") and os.getenv("GOOGLE_SHEETS_SPREADSHEET_ID"):
+        # Check if Google Sheets is configured (either service account or OAuth2)
+        has_service_account = bool(os.getenv("GOOGLE_SHEETS_CREDENTIALS_PATH"))
+        has_oauth2 = bool(
+            os.getenv("GOOGLE_SHEETS_CLIENT_ID") and 
+            os.getenv("GOOGLE_SHEETS_CLIENT_SECRET") and 
+            os.getenv("GOOGLE_SHEETS_REFRESH_TOKEN")
+        )
+        has_spreadsheet_id = bool(os.getenv("GOOGLE_SHEETS_SPREADSHEET_ID"))
+        
+        if (has_service_account or has_oauth2) and has_spreadsheet_id:
             logger.info("Initializing Google Sheets cache service...")
             sheets_cache_service = GoogleSheetsCacheService(
                 redis_host=os.getenv("REDIS_HOST", "localhost"),
@@ -130,21 +139,26 @@ async def lifespan(app: FastAPI):
             polling_task = asyncio.create_task(fallback_polling_task(sheets_cache_service))
             logger.info("Background polling task started")
         else:
-            logger.warning("Google Sheets not configured - skipping cache service initialization")
+            logger.warning(
+                "Google Sheets not configured - skipping cache service initialization. "
+                "Configure either GOOGLE_SHEETS_CREDENTIALS_PATH (service account) or "
+                "GOOGLE_SHEETS_CLIENT_ID/CLIENT_SECRET/REFRESH_TOKEN (OAuth2)"
+            )
     except Exception as e:
         logger.error(f"Error initializing Google Sheets cache service: {e}", exc_info=True)
         logger.warning("Continuing without Google Sheets cache - agent will work but without sheet data")
+        sheets_cache_service = None  # Ensure it's set to None on error
     
     try:
         agent = IntelligentChatAgent(
-            model_name=os.getenv("MODEL_NAME", "gpt-4o"),  # Default to gpt-4o for large context
+            model_name=os.getenv("MODEL_NAME", "gpt-4.1-mini"),  # Default to gpt-4.1-mini for 128k context window
             temperature=float(os.getenv("TEMPERATURE", "0.7")),
             memory_db_path=os.getenv("MEMORY_DB_PATH", "./memory_db"),
             summarize_interval=int(os.getenv("SUMMARIZE_INTERVAL", "10")),
             sheets_cache_service=sheets_cache_service
         )
         logger.info("Agent initialized successfully")
-        logger.info(f"Model: {os.getenv('MODEL_NAME', 'gpt-4o')}")
+        logger.info(f"Model: {os.getenv('MODEL_NAME', 'gpt-4.1-mini')}")
         logger.info(f"Memory DB: {os.getenv('MEMORY_DB_PATH', './memory_db')}")
     except ValueError as e:
         logger.error(f"Configuration error: {e}")
@@ -278,6 +292,36 @@ async def root():
         "docs": "/docs",
         "health": "/health"
     }
+
+
+@app.get("/debug/sheets", tags=["Debug"])
+async def debug_sheets():
+    """Debug endpoint to test Google Sheets connection and list available sheets."""
+    if not sheets_cache_service:
+        return {
+            "error": "Google Sheets cache service not initialized",
+            "spreadsheet_id": os.getenv("GOOGLE_SHEETS_SPREADSHEET_ID", "Not set"),
+            "configured_sheets": os.getenv("GOOGLE_SHEETS_SHEET_NAMES", "Not set")
+        }
+    
+    try:
+        available_sheets = sheets_cache_service.list_available_sheets()
+        return {
+            "status": "success",
+            "spreadsheet_id": sheets_cache_service.spreadsheet_id,
+            "configured_sheets": sheets_cache_service.sheet_names,
+            "available_sheets": available_sheets,
+            "sheets_match": all(s in available_sheets for s in sheets_cache_service.sheet_names),
+            "missing_sheets": [s for s in sheets_cache_service.sheet_names if s not in available_sheets]
+        }
+    except Exception as e:
+        return {
+            "status": "error",
+            "spreadsheet_id": sheets_cache_service.spreadsheet_id,
+            "configured_sheets": sheets_cache_service.sheet_names,
+            "error": str(e),
+            "error_type": type(e).__name__
+        }
 
 
 @app.get("/health", tags=["Health"], response_model=HealthResponse)

@@ -70,3 +70,4 @@ Dockerfile*
 .gitlab-ci.yml
 .travis.yml
 
+sheets_index_db/

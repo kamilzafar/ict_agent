@@ -6,6 +6,8 @@ import logging
 from typing import Dict, List, Optional, Any, Tuple
 from datetime import datetime
 from google.oauth2 import service_account
+from google.oauth2.credentials import Credentials as OAuth2Credentials
+from google.auth.transport.requests import Request
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 import redis
@@ -49,33 +51,51 @@ class GoogleSheetsCacheService:
         sheet_names_str = os.getenv("GOOGLE_SHEETS_SHEET_NAMES", "")
         self.sheet_names = sheet_names or [s.strip() for s in sheet_names_str.split(",") if s.strip()]
         
-        if not self.credentials_path:
-            raise ValueError("GOOGLE_SHEETS_CREDENTIALS_PATH must be set")
+        # Check for OAuth2 credentials
+        self.oauth2_client_id = os.getenv("GOOGLE_SHEETS_CLIENT_ID")
+        self.oauth2_client_secret = os.getenv("GOOGLE_SHEETS_CLIENT_SECRET")
+        self.oauth2_refresh_token = os.getenv("GOOGLE_SHEETS_REFRESH_TOKEN")
+        
+        # Validate configuration
+        has_service_account = bool(self.credentials_path)
+        has_oauth2 = bool(self.oauth2_client_id and self.oauth2_client_secret and self.oauth2_refresh_token)
+        
+        if not has_service_account and not has_oauth2:
+            raise ValueError(
+                "Either GOOGLE_SHEETS_CREDENTIALS_PATH (service account) or "
+                "GOOGLE_SHEETS_CLIENT_ID/CLIENT_SECRET/REFRESH_TOKEN (OAuth2) must be set"
+            )
+        
         if not self.spreadsheet_id:
             raise ValueError("GOOGLE_SHEETS_SPREADSHEET_ID must be set")
         if not self.sheet_names:
             raise ValueError("GOOGLE_SHEETS_SHEET_NAMES must be set")
+        
+        # Log configuration for debugging
+        logger.info(f"Google Sheets Configuration:")
+        logger.info(f"  Spreadsheet ID: {self.spreadsheet_id}")
+        logger.info(f"  Sheet Names: {', '.join(self.sheet_names)}")
+        logger.info(f"  Auth Method: {'OAuth2' if has_oauth2 else 'Service Account' if has_service_account else 'None'}")
         
         # Initialize Google Sheets API
         self._init_google_sheets_client()
         
         # Initialize Redis with connection pooling and retry logic
         try:
-            self.redis_client = redis.Redis(
+            # Create Redis connection pool
+            pool = redis.ConnectionPool(
                 host=redis_host,
                 port=redis_port,
                 password=redis_password or os.getenv("REDIS_PASSWORD"),
                 db=redis_db,
+                max_connections=50,
                 decode_responses=True,
                 socket_connect_timeout=5,
                 socket_timeout=5,
                 retry_on_timeout=True,
-                health_check_interval=30,
-                connection_pool_kwargs={
-                    "max_connections": 50,
-                    "retry_on_timeout": True,
-                }
+                health_check_interval=30
             )
+            self.redis_client = redis.Redis(connection_pool=pool)
             self.redis_client.ping()  # Test connection
             logger.info("Redis connection established")
         except redis.ConnectionError as e:
@@ -99,19 +119,137 @@ class GoogleSheetsCacheService:
             chunk_overlap=200
         )
         
+        # In-memory cache fallback (used when Redis is not available)
+        self._in_memory_cache: Dict[str, List[List[str]]] = {}
+        
+        # Validate spreadsheet access and list available sheets
+        try:
+            logger.info(f"Validating access to spreadsheet: {self.spreadsheet_id}")
+            available_sheets = self.list_available_sheets()
+            logger.info(f"✓ Connected to spreadsheet {self.spreadsheet_id}")
+            logger.info(f"✓ Available sheets: {', '.join(available_sheets)}")
+            
+            # Check if configured sheets exist
+            missing_sheets = [s for s in self.sheet_names if s not in available_sheets]
+            if missing_sheets:
+                logger.error(
+                    f"✗ Configured sheets not found: {', '.join(missing_sheets)}\n"
+                    f"  Available sheets: {', '.join(available_sheets)}\n"
+                    f"  Requested sheets: {', '.join(self.sheet_names)}\n"
+                    f"  Please check sheet names match exactly (case-sensitive)"
+                )
+            else:
+                logger.info(f"✓ All configured sheets found: {', '.join(self.sheet_names)}")
+        except HttpError as e:
+            if e.resp.status == 404:
+                logger.error(
+                    f"✗ Spreadsheet not found: {self.spreadsheet_id}\n"
+                    f"  Error: {e}\n"
+                    f"  Please verify:\n"
+                    f"  1. Spreadsheet ID is correct\n"
+                    f"  2. The Google account has access to this spreadsheet\n"
+                    f"  3. The spreadsheet is not deleted or moved"
+                )
+            elif e.resp.status == 403:
+                logger.error(
+                    f"✗ Access denied to spreadsheet: {self.spreadsheet_id}\n"
+                    f"  Error: {e}\n"
+                    f"  Please verify:\n"
+                    f"  1. The Google account has been granted access to the spreadsheet\n"
+                    f"  2. For OAuth2: Share the sheet with the Google account email\n"
+                    f"  3. For Service Account: Share the sheet with the service account email"
+                )
+            else:
+                logger.error(f"✗ HTTP error accessing spreadsheet: {e}")
+        except Exception as e:
+            logger.error(f"✗ Could not validate spreadsheet access: {e}", exc_info=True)
+        
         logger.info(f"Initialized Google Sheets cache service for {len(self.sheet_names)} sheets")
     
     def _init_google_sheets_client(self):
-        """Initialize Google Sheets API client."""
-        try:
-            credentials = service_account.Credentials.from_service_account_file(
-                self.credentials_path,
-                scopes=['https://www.googleapis.com/auth/spreadsheets.readonly']
+        """Initialize Google Sheets API client with OAuth2 or Service Account."""
+        scopes = ['https://www.googleapis.com/auth/spreadsheets.readonly']
+        credentials = None
+        
+        # Try OAuth2 first if credentials are available
+        if self.oauth2_client_id and self.oauth2_client_secret and self.oauth2_refresh_token:
+            try:
+                logger.info("Attempting OAuth2 authentication...")
+                credentials = OAuth2Credentials(
+                    token=None,  # Will be refreshed
+                    refresh_token=self.oauth2_refresh_token,
+                    token_uri="https://oauth2.googleapis.com/token",
+                    client_id=self.oauth2_client_id,
+                    client_secret=self.oauth2_client_secret,
+                    scopes=scopes
+                )
+                # Refresh the token
+                credentials.refresh(Request())
+                logger.info("Google Sheets API client initialized with OAuth2")
+            except Exception as e:
+                logger.warning(f"OAuth2 authentication failed: {e}. Trying service account...")
+                credentials = None
+        
+        # Fall back to service account if OAuth2 failed or not configured
+        # Only try service account if credentials_path is set AND file exists
+        if not credentials and self.credentials_path and os.path.exists(self.credentials_path):
+            try:
+                # Try to load as service account
+                try:
+                    credentials = service_account.Credentials.from_service_account_file(
+                        self.credentials_path,
+                        scopes=scopes
+                    )
+                    logger.info("Google Sheets API client initialized with service account")
+                except Exception as sa_error:
+                    # If service account fails, check if it's an OAuth2 client config file
+                    try:
+                        with open(self.credentials_path, 'r') as f:
+                            cred_data = json.load(f)
+                        
+                        # Check if it's an OAuth2 client config (has "web" or "installed" key)
+                        if "web" in cred_data or "installed" in cred_data:
+                            logger.info("Found OAuth2 client config in credentials file")
+                            client_config = cred_data.get("web") or cred_data.get("installed", {})
+                            
+                            if self.oauth2_refresh_token:
+                                # Use refresh token if available
+                                credentials = OAuth2Credentials(
+                                    token=None,
+                                    refresh_token=self.oauth2_refresh_token,
+                                    token_uri=client_config.get("token_uri", "https://oauth2.googleapis.com/token"),
+                                    client_id=client_config.get("client_id"),
+                                    client_secret=client_config.get("client_secret"),
+                                    scopes=scopes
+                                )
+                                credentials.refresh(Request())
+                                logger.info("Google Sheets API client initialized with OAuth2 from file")
+                            else:
+                                raise ValueError(
+                                    "OAuth2 client config found but GOOGLE_SHEETS_REFRESH_TOKEN is not set. "
+                                    "Run 'python scripts/setup_oauth2.py' to get a refresh token."
+                                )
+                        else:
+                            raise sa_error  # Re-raise original service account error
+                    except json.JSONDecodeError:
+                        raise sa_error  # Re-raise original service account error
+            except Exception as e:
+                logger.warning(f"Service account authentication failed: {e}")
+                # Don't raise error here, let it fall through to check if we have any valid credentials
+        
+        # Final check: if no credentials were obtained, raise error
+        if not credentials:
+            raise RuntimeError(
+                "No valid authentication method available. "
+                "Configure either service account JSON or OAuth2 credentials."
             )
+        
+        # Build the service
+        try:
             self.sheets_service = build('sheets', 'v4', credentials=credentials)
-            logger.info("Google Sheets API client initialized")
+            logger.info("Google Sheets API service built successfully")
         except Exception as e:
-            raise RuntimeError(f"Failed to initialize Google Sheets client: {e}") from e
+            raise RuntimeError(f"Failed to build Google Sheets service: {e}") from e
     
     def _calculate_hash(self, data: List[List[str]]) -> str:
         """Calculate SHA256 hash of sheet data."""
@@ -144,29 +282,80 @@ class GoogleSheetsCacheService:
             logger.error(f"Error setting metadata for {sheet_name}: {e}")
     
     def _get_cached_data(self, sheet_name: str) -> Optional[List[List[str]]]:
-        """Get cached sheet data from Redis."""
-        if not self.redis_client:
-            return None
+        """Get cached sheet data from Redis or in-memory cache."""
+        # Try Redis first if available
+        if self.redis_client:
+            try:
+                key = f"sheets:data:{self.spreadsheet_id}:{sheet_name}"
+                data_str = self.redis_client.get(key)
+                if data_str:
+                    return json.loads(data_str)
+            except Exception as e:
+                logger.debug(f"Error getting cached data from Redis for {sheet_name}: {e}")
         
-        try:
-            key = f"sheets:data:{self.spreadsheet_id}:{sheet_name}"
-            data_str = self.redis_client.get(key)
-            if data_str:
-                return json.loads(data_str)
-        except Exception as e:
-            logger.error(f"Error getting cached data for {sheet_name}: {e}")
+        # Fallback to in-memory cache
+        if sheet_name in self._in_memory_cache:
+            logger.debug(f"Retrieved {sheet_name} from in-memory cache")
+            return self._in_memory_cache[sheet_name]
+        
         return None
     
     def _set_cached_data(self, sheet_name: str, data: List[List[str]]):
-        """Store sheet data in Redis cache."""
-        if not self.redis_client:
-            return
+        """Store sheet data in Redis cache and in-memory cache."""
+        # Store in Redis if available
+        if self.redis_client:
+            try:
+                key = f"sheets:data:{self.spreadsheet_id}:{sheet_name}"
+                self.redis_client.setex(
+                    key,
+                    86400,  # 24 hours TTL
+                    json.dumps(data)
+                )
+            except Exception as e:
+                logger.debug(f"Error caching data in Redis for {sheet_name}: {e}")
         
+        # Always store in in-memory cache as fallback
+        self._in_memory_cache[sheet_name] = data
+        logger.debug(f"Cached {sheet_name} in memory ({len(data)} rows)")
+    
+    def list_available_sheets(self) -> List[str]:
+        """List all available sheet names in the spreadsheet."""
         try:
-            key = f"sheets:data:{self.spreadsheet_id}:{sheet_name}"
-            self.redis_client.set(key, json.dumps(data))
+            logger.debug(f"Fetching spreadsheet metadata for: {self.spreadsheet_id}")
+            spreadsheet = self.sheets_service.spreadsheets().get(
+                spreadsheetId=self.spreadsheet_id
+            ).execute()
+            
+            sheets = spreadsheet.get('sheets', [])
+            if not sheets:
+                logger.warning(f"No sheets found in spreadsheet {self.spreadsheet_id}")
+                return []
+            
+            sheet_names = [
+                sheet['properties']['title'] 
+                for sheet in sheets
+            ]
+            logger.debug(f"Found {len(sheet_names)} sheets: {sheet_names}")
+            return sheet_names
+        except HttpError as e:
+            if e.resp.status == 404:
+                logger.error(
+                    f"✗ Spreadsheet not found: {self.spreadsheet_id}\n"
+                    f"  HTTP 404 Error: {e}\n"
+                    f"  Check if spreadsheet ID is correct and the account has access."
+                )
+            elif e.resp.status == 403:
+                logger.error(
+                    f"✗ Access denied to spreadsheet: {self.spreadsheet_id}\n"
+                    f"  HTTP 403 Error: {e}\n"
+                    f"  Share the spreadsheet with the Google account or service account."
+                )
+            else:
+                logger.error(f"✗ HTTP error listing sheets: {e}")
+            raise
         except Exception as e:
-            logger.error(f"Error setting cached data for {sheet_name}: {e}")
+            logger.error(f"✗ Error listing sheets: {e}", exc_info=True)
+            raise
     
     def fetch_sheet_data(self, sheet_name: str) -> Tuple[List[List[str]], Dict[str, Any]]:
         """Fetch sheet data from Google Sheets API.
@@ -175,12 +364,23 @@ class GoogleSheetsCacheService:
             Tuple of (data, metadata) where data is list of rows and metadata contains hash, timestamp, etc.
         """
         try:
+            logger.debug(f"Fetching data from sheet '{sheet_name}' in spreadsheet {self.spreadsheet_id}")
             result = self.sheets_service.spreadsheets().values().get(
                 spreadsheetId=self.spreadsheet_id,
                 range=sheet_name
             ).execute()
             
             values = result.get('values', [])
+            
+            if not values:
+                logger.warning(f"Sheet '{sheet_name}' is empty")
+                return [], {
+                    "hash": "",
+                    "last_updated": datetime.now().isoformat(),
+                    "row_count": 0,
+                    "column_count": 0,
+                    "sheet_name": sheet_name
+                }
             
             # Calculate hash
             data_hash = self._calculate_hash(values)
@@ -194,14 +394,39 @@ class GoogleSheetsCacheService:
                 "sheet_name": sheet_name
             }
             
-            logger.info(f"Fetched {len(values)} rows from {sheet_name}")
+            logger.info(f"✓ Fetched {len(values)} rows from {sheet_name}")
             return values, metadata
             
         except HttpError as e:
-            logger.error(f"Error fetching sheet {sheet_name}: {e}")
+            if e.resp.status == 404:
+                # Try to list available sheets for better error message
+                try:
+                    available_sheets = self.list_available_sheets()
+                    logger.error(
+                        f"✗ Sheet '{sheet_name}' not found in spreadsheet {self.spreadsheet_id}\n"
+                        f"  Available sheets: {', '.join(available_sheets)}\n"
+                        f"  Requested sheet: '{sheet_name}'\n"
+                        f"  Check if sheet name matches exactly (case-sensitive)"
+                    )
+                except Exception as list_error:
+                    logger.error(
+                        f"✗ Sheet '{sheet_name}' not found and cannot list available sheets\n"
+                        f"  Spreadsheet ID: {self.spreadsheet_id}\n"
+                        f"  Error listing sheets: {list_error}\n"
+                        f"  Original error: {e}"
+                    )
+            elif e.resp.status == 403:
+                logger.error(
+                    f"✗ Access denied when fetching sheet '{sheet_name}'\n"
+                    f"  Spreadsheet ID: {self.spreadsheet_id}\n"
+                    f"  Error: {e}\n"
+                    f"  Verify the account has read access to this spreadsheet"
+                )
+            else:
+                logger.error(f"✗ HTTP error fetching sheet '{sheet_name}': {e}")
             raise
         except Exception as e:
-            logger.error(f"Unexpected error fetching sheet {sheet_name}: {e}")
+            logger.error(f"✗ Unexpected error fetching sheet '{sheet_name}': {e}", exc_info=True)
             raise
     
     def is_sheet_updated(self, sheet_name: str) -> bool:

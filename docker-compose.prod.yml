@@ -1,12 +1,16 @@
-version: '3.8'
-
 services:
+  # Redis is optional - app will work without it (uses in-memory cache)
+  # To use Redis, start with: docker compose --profile with-redis up
   redis:
     image: redis:7-alpine
     container_name: ict_agent_redis
     ports:
       - "${REDIS_PORT:-6379}:6379"
-    command: redis-server --requirepass ${REDIS_PASSWORD:-} --appendonly yes --maxmemory 512mb --maxmemory-policy allkeys-lru
+    # For local: no password by default. Set REDIS_PASSWORD in .env for production
+    # Note: If REDIS_PASSWORD is set, you'll need to update the command manually or use an entrypoint script
+    command: redis-server --appendonly yes --maxmemory 512mb --maxmemory-policy allkeys-lru
+    environment:
+      - REDIS_PASSWORD=${REDIS_PASSWORD:-}
     volumes:
       - redis_data:/data
     restart: unless-stopped
@@ -17,111 +21,41 @@ services:
       retries: 5
     networks:
       - ict_agent_network
-    deploy:
-      resources:
-        limits:
-          cpus: '1'
-          memory: 512M
-        reservations:
-          cpus: '0.5'
-          memory: 256M
+    profiles:
+      - with-redis  # Only start Redis if explicitly requested: docker compose --profile with-redis up
 
   api:
-    build:
-      context: .
-      dockerfile: docker/Dockerfile
     image: kamilzafar/ict_agent:latest
     container_name: ict_agent_api
     ports:
       - "${API_PORT:-8009}:8009"
-    environment:
-      # Required API Keys
-      - OPENAI_API_KEY=${OPENAI_API_KEY}
-      - API_KEY=${API_KEY}
-      
-      # Google Sheets Configuration
-      - GOOGLE_SHEETS_CREDENTIALS_PATH=${GOOGLE_SHEETS_CREDENTIALS_PATH:-/app/credentials/google-sheets-service-account.json}
-      - GOOGLE_SHEETS_SPREADSHEET_ID=${GOOGLE_SHEETS_SPREADSHEET_ID}
-      - GOOGLE_SHEETS_SHEET_NAMES=${GOOGLE_SHEETS_SHEET_NAMES:-Course_Details,Course_Links,FAQs,About_Profr,Company_Info}
-      - SHEETS_WEBHOOK_ENABLED=${SHEETS_WEBHOOK_ENABLED:-true}
-      - SHEETS_WEBHOOK_SECRET=${SHEETS_WEBHOOK_SECRET}
-      - SHEETS_FALLBACK_POLL_ENABLED=${SHEETS_FALLBACK_POLL_ENABLED:-true}
-      - SHEETS_FALLBACK_POLL_INTERVAL=${SHEETS_FALLBACK_POLL_INTERVAL:-86400}
-      
-      # Redis Configuration
-      - REDIS_HOST=redis
-      - REDIS_PORT=6379
-      - REDIS_PASSWORD=${REDIS_PASSWORD:-}
-      - REDIS_DB=${REDIS_DB:-0}
-      
-      # ChromaDB Configuration
-      - CHROMA_DB_PATH=/app/sheets_index_db
-      
-      # Optional Configuration
-      - MODEL_NAME=${MODEL_NAME:-gpt-4o}
-      - TEMPERATURE=${TEMPERATURE:-0.7}
-      
-      # Memory & Storage
-      - MEMORY_DB_PATH=/app/memory_db
-      - SUMMARIZE_INTERVAL=${SUMMARIZE_INTERVAL:-10}
-      
-      # API Server Configuration
-      - API_HOST=0.0.0.0
-      - API_PORT=8009
-      - ENVIRONMENT=production
-      
-      # Production Performance Settings
-      - WORKERS=${WORKERS:-4}
-      - MAX_CONCURRENT=${MAX_CONCURRENT:-100}
-      - KEEP_ALIVE=${KEEP_ALIVE:-120}
-      - TIMEOUT=${TIMEOUT:-120}
-      
-      # Logging
-      - LOG_LEVEL=${LOG_LEVEL:-info}
-      
-      # CORS & Security
-      - CORS_ORIGINS=${CORS_ORIGINS:-*}
-      - TRUSTED_HOSTS=${TRUSTED_HOSTS:-*}
-      
-      # Nginx Proxy Configuration
-      - ROOT_PATH=${ROOT_PATH:-}
-      
-      # MCP RAG Configuration
-      - MCP_RAG_SHEETS_URL=${MCP_RAG_SHEETS_URL:-https://www.ictpk.cloud/mcp/rag-sheets}
+    env_file:
+      - .env
     
     volumes:
-      # Persist memory database
+      # Persist memory database (bind mount for easy backup/access)
       - ./memory_db:/app/memory_db
-      # Persist ChromaDB index
+      # Persist ChromaDB index (for Google Sheets semantic search)
       - ./sheets_index_db:/app/sheets_index_db
-      # Mount Google Sheets credentials (if using file-based auth)
-      - ${GOOGLE_SHEETS_CREDENTIALS_PATH:-./credentials/google-sheets-service-account.json}:/app/credentials/google-sheets-service-account.json:ro
-      # Optional: Mount logs directory
+      # Optional: Mount logs directory for debugging
       - ./logs:/app/logs
+      # Optional: Mount credentials if using service account (uncomment if needed)
+      # - ./credentials:/app/credentials:ro
     
-    depends_on:
-      redis:
-        condition: service_healthy
+    # Redis is optional - remove depends_on if not using Redis
+    # depends_on:
+    #   redis:
+    #     condition: service_healthy
     
     restart: unless-stopped
     
     # Health check
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8009/health')"]
+      test: ["CMD", "curl", "-f", "http://localhost:8009/health"]
       interval: 30s
       timeout: 10s
       retries: 3
       start_period: 40s
-    
-    # Resource limits (adjust based on your server)
-    deploy:
-      resources:
-        limits:
-          cpus: '4'
-          memory: 8G
-        reservations:
-          cpus: '2'
-          memory: 4G
     
     # Logging configuration
     logging:

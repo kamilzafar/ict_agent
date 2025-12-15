@@ -100,6 +100,10 @@ class ContextInjector:
         headers = data[0] if data else []
         rows = data[1:] if len(data) > 1 else []
         
+        # Special formatting for Course_Links sheet to make links more visible
+        if sheet_name == "Course_Links":
+            return self._format_course_links(headers, rows, filter_course)
+        
         # Filter rows if course filter is specified
         if filter_course and headers:
             # Try to find course column
@@ -138,6 +142,86 @@ class ContextInjector:
             return "\n".join(formatted_lines)
         
         return ""
+    
+    def _format_course_links(self, headers: List[str], rows: List[List[str]], filter_course: Optional[str] = None) -> str:
+        """Format Course_Links sheet data with emphasis on links.
+        
+        Args:
+            headers: Column headers
+            rows: Data rows
+            filter_course: Optional course name to filter by
+        
+        Returns:
+            Formatted Course_Links data with clear link visibility
+        """
+        # Find column indices
+        course_col_idx = None
+        demo_link_col_idx = None
+        pdf_link_col_idx = None
+        course_link_col_idx = None
+        
+        for idx, header in enumerate(headers):
+            header_lower = header.lower()
+            if 'course' in header_lower and ('name' in header_lower or 'course' == header_lower):
+                course_col_idx = idx
+            elif 'demo' in header_lower and 'link' in header_lower:
+                demo_link_col_idx = idx
+            elif 'pdf' in header_lower and 'link' in header_lower:
+                pdf_link_col_idx = idx
+            elif 'course_link' in header_lower or 'course_page' in header_lower:
+                course_link_col_idx = idx
+        
+        if course_col_idx is None:
+            # Fallback to generic formatting
+            return self._format_generic_sheet(headers, rows, filter_course)
+        
+        # Filter by course if specified
+        if filter_course:
+            filter_lower = filter_course.lower()
+            rows = [
+                row for row in rows 
+                if course_col_idx < len(row) and row[course_col_idx] 
+                and filter_lower in row[course_col_idx].lower()
+            ]
+        
+        # Format with emphasis on links
+        formatted_lines = []
+        for row in rows:
+            if course_col_idx >= len(row) or not row[course_col_idx]:
+                continue
+            
+            course_name = row[course_col_idx]
+            parts = [f"Course: {course_name}"]
+            
+            if demo_link_col_idx is not None and demo_link_col_idx < len(row) and row[demo_link_col_idx]:
+                parts.append(f"Demo_Link: {row[demo_link_col_idx]}")
+            
+            if pdf_link_col_idx is not None and pdf_link_col_idx < len(row) and row[pdf_link_col_idx]:
+                parts.append(f"Pdf_Link: {row[pdf_link_col_idx]}")
+            
+            if course_link_col_idx is not None and course_link_col_idx < len(row) and row[course_link_col_idx]:
+                parts.append(f"Course_Link: {row[course_link_col_idx]}")
+            
+            if len(parts) > 1:  # At least course name + one link
+                formatted_lines.append(" | ".join(parts))
+        
+        if formatted_lines:
+            return "\n".join(formatted_lines)
+        
+        return ""
+    
+    def _format_generic_sheet(self, headers: List[str], rows: List[List[str]], filter_course: Optional[str] = None) -> str:
+        """Generic sheet formatting fallback."""
+        formatted_lines = []
+        for row in rows:
+            row_parts = []
+            for col_idx, value in enumerate(row):
+                if col_idx < len(headers) and value:
+                    header = headers[col_idx]
+                    row_parts.append(f"{header}: {value}")
+            if row_parts:
+                formatted_lines.append(" | ".join(row_parts))
+        return "\n".join(formatted_lines)
     
     def search_and_inject(self, query: str, top_k: int = 3) -> str:
         """Search cached data and return formatted results for injection.

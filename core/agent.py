@@ -17,6 +17,7 @@ from langgraph.checkpoint.memory import MemorySaver
 
 from core.memory import LongTermMemory
 from tools.mcp_rag_tools import get_mcp_rag_tools
+from tools.sheets_tools import create_google_sheets_tools
 from core.context_injector import ContextInjector
 
 
@@ -80,11 +81,12 @@ class IntelligentChatAgent:
                 "Please check your OPENAI_API_KEY is valid and the model name is correct."
             ) from e
         
-        # Get available tools (only MCP RAG tools now - no Pinecone)
-        self.mcp_rag_tools = get_mcp_rag_tools()
+        # Get available tools (MCP RAG tools + Google Sheets tools)
+        self.mcp_rag_tools = get_mcp_rag_tools(sheets_cache_service)
+        self.sheets_tools = create_google_sheets_tools(sheets_cache_service) if sheets_cache_service else []
         
         # Combine all tools
-        all_tools = self.mcp_rag_tools
+        all_tools = self.mcp_rag_tools + self.sheets_tools
         
         # Bind tools to LLM if available
         if all_tools:
@@ -263,14 +265,31 @@ You help leads with course enrollment through WhatsApp conversations."""
         tool_info = ""
         if self.all_tools:
             tool_descriptions = []
+            
+            # MCP RAG tool (for saving data)
             if self.mcp_rag_tools:
-                tool_descriptions.append("a tool to append lead data to RAG sheets (append_lead_to_rag_sheets) - Use this to save lead information when collecting data or before sharing demo video link")
+                tool_descriptions.append("append_lead_to_rag_sheets - Save lead data to Leads sheet. Do NOT use to fetch links or course data.")
+            
+            # Sheet tools (for fetching data)
+            if self.sheets_tools:
+                tool_descriptions.append("fetch_course_links - Get demo links, PDF links, or course page links from Course_Links sheet")
+                tool_descriptions.append("fetch_course_details - Get course information (fees, duration, dates, professor, locations) from Course_Details sheet")
+                tool_descriptions.append("fetch_faqs - Get FAQs from FAQs sheet")
+                tool_descriptions.append("fetch_professor_info - Get professor/trainer information from About_Profr sheet")
+                tool_descriptions.append("fetch_company_info - Get company information (contact, social media, locations) from Company_Info sheet")
             
             if tool_descriptions:
                 tool_info = f"\n\n## AVAILABLE TOOLS:\n\nYou have access to the following tools:\n"
                 for desc in tool_descriptions:
                     tool_info += f"- {desc}\n"
-                tool_info += "\nUse append_lead_to_rag_sheets tool to save lead data before sharing demo video link (Step 6).\n"
+                tool_info += "\nIMPORTANT TOOL USAGE RULES:\n"
+                tool_info += "- To GET links (demo, PDF, course page) → Use fetch_course_links\n"
+                tool_info += "- To GET course information → Use fetch_course_details\n"
+                tool_info += "- To GET FAQs → Use fetch_faqs\n"
+                tool_info += "- To GET professor info → Use fetch_professor_info\n"
+                tool_info += "- To GET company info → Use fetch_company_info\n"
+                tool_info += "- To SAVE lead data → Use append_lead_to_rag_sheets (only before sharing demo video link in Step 6)\n"
+                tool_info += "\nNEVER use append_lead_to_rag_sheets to fetch links or course data - it only saves data.\n"
         
         # Add Google Sheets context injection (proactive - no tool calls needed)
         sheets_context = ""
