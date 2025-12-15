@@ -3,9 +3,15 @@ import os
 import logging
 import asyncio
 import sys
+import time
 from contextlib import asynccontextmanager
 from typing import Optional, List, Dict, Any
 from datetime import datetime
+from pathlib import Path
+
+# Import fcntl only on Unix systems
+if sys.platform != "win32":
+    import fcntl
 
 from fastapi import FastAPI, HTTPException, status, Request, Header, Depends, Security
 from fastapi.middleware.cors import CORSMiddleware
@@ -126,14 +132,95 @@ async def lifespan(app: FastAPI):
                 chroma_db_path=os.getenv("CHROMA_DB_PATH", "./sheets_index_db")
             )
             
-            # Pre-load all sheets on startup
-            logger.info("Pre-loading Google Sheets data...")
+            # Pre-load all sheets on startup (only from one worker to avoid DB locking)
+            # Use file lock to ensure only one worker pre-loads
+            lock_file_path = Path(os.getenv("CHROMA_DB_PATH", "./sheets_index_db")) / ".preload.lock"
+            lock_file_path.parent.mkdir(parents=True, exist_ok=True)
+            
+            should_preload = False
+            lock_file = None
+            
             try:
-                sheets_cache_service.preload_all_sheets()
-                logger.info("Google Sheets cache initialized successfully")
+                # Try to acquire lock (non-blocking)
+                lock_file = open(lock_file_path, 'w')
+                try:
+                    # Try to acquire exclusive lock (non-blocking)
+                    if sys.platform != "win32":
+                        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    else:
+                        # Windows: use msvcrt for file locking
+                        import msvcrt
+                        msvcrt.locking(lock_file.fileno(), msvcrt.LK_NBLCK, 1)
+                    
+                    should_preload = True
+                    logger.info("Acquired pre-load lock - this worker will pre-load sheets")
+                except (IOError, OSError, BlockingIOError):
+                    # Another worker has the lock
+                    logger.info("Another worker is pre-loading sheets - skipping pre-load")
+                    should_preload = False
+            except ImportError:
+                # fcntl not available (Windows), use simple file existence check
+                if lock_file_path.exists():
+                    logger.info("Pre-load lock file exists - another worker is pre-loading sheets")
+                    should_preload = False
+                else:
+                    # Create lock file
+                    try:
+                        lock_file_path.write_text(str(os.getpid()))
+                        should_preload = True
+                        logger.info("Created pre-load lock - this worker will pre-load sheets")
+                    except Exception as e:
+                        logger.warning(f"Could not create pre-load lock: {e}. Skipping pre-load.")
+                        should_preload = False
             except Exception as e:
-                logger.error(f"Error pre-loading sheets: {e}")
-                logger.warning("Continuing without pre-loaded sheets - will retry on first webhook")
+                logger.warning(f"Could not acquire pre-load lock: {e}. Skipping pre-load to avoid conflicts.")
+                should_preload = False
+            
+            if should_preload:
+                logger.info("Pre-loading Google Sheets data...")
+                try:
+                    sheets_cache_service.preload_all_sheets()
+                    logger.info("Google Sheets cache initialized successfully")
+                except Exception as e:
+                    logger.error(f"Error pre-loading sheets: {e}")
+                    logger.warning("Continuing without pre-loaded sheets - will retry on first webhook")
+                finally:
+                    # Release lock
+                    if lock_file:
+                        try:
+                            if sys.platform != "win32":
+                                fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+                            else:
+                                try:
+                                    import msvcrt
+                                    msvcrt.locking(lock_file.fileno(), msvcrt.LK_UNLCK, 1)
+                                except ImportError:
+                                    pass
+                            lock_file.close()
+                        except Exception as e:
+                            logger.warning(f"Error releasing lock: {e}")
+                    # Remove lock file
+                    try:
+                        if lock_file_path.exists():
+                            lock_file_path.unlink()
+                    except Exception as e:
+                        logger.warning(f"Error removing lock file: {e}")
+            else:
+                # Wait a bit for the other worker to finish pre-loading
+                logger.info("Waiting for pre-load to complete...")
+                max_wait = 60  # Wait up to 60 seconds
+                wait_interval = 2
+                waited = 0
+                while waited < max_wait:
+                    if not lock_file_path.exists():
+                        logger.info("Pre-load completed by another worker")
+                        break
+                    time.sleep(wait_interval)
+                    waited += wait_interval
+                else:
+                    logger.warning("Pre-load lock still present after waiting - continuing anyway")
+                if lock_file:
+                    lock_file.close()
             
             # Start fallback polling task
             polling_task = asyncio.create_task(fallback_polling_task(sheets_cache_service))

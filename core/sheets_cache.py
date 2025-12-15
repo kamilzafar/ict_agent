@@ -504,6 +504,10 @@ class GoogleSheetsCacheService:
     def _index_sheet(self, sheet_name: str, data: List[List[str]]):
         """Index sheet data in ChromaDB for semantic search."""
         try:
+            # Ensure directory exists with proper permissions
+            import os
+            os.makedirs(self.chroma_db_path, exist_ok=True)
+            
             # Create documents from sheet data
             documents = self._create_documents_from_sheet(sheet_name, data)
             
@@ -520,22 +524,53 @@ class GoogleSheetsCacheService:
             # Create or update ChromaDB collection
             collection_name = f"{sheet_name}_index"
             
+            # Try to delete existing collection if it exists
             if collection_name in self.vector_stores:
-                # Delete existing collection
                 try:
                     self.vector_stores[collection_name].delete_collection()
-                except:
-                    pass
+                except Exception as e:
+                    logger.debug(f"Could not delete existing collection {collection_name}: {e}")
             
-            # Create new collection
-            self.vector_stores[collection_name] = Chroma.from_documents(
-                documents=split_docs,
-                embedding=self.embeddings,
-                persist_directory=self.chroma_db_path,
-                collection_name=collection_name
-            )
+            # Try to create/update collection with retry logic for concurrent access
+            max_retries = 3
+            retry_delay = 1.0
             
-            logger.info(f"Indexed {len(split_docs)} documents for {sheet_name}")
+            for attempt in range(max_retries):
+                try:
+                    # Create new collection
+                    self.vector_stores[collection_name] = Chroma.from_documents(
+                        documents=split_docs,
+                        embedding=self.embeddings,
+                        persist_directory=self.chroma_db_path,
+                        collection_name=collection_name
+                    )
+                    
+                    logger.info(f"Indexed {len(split_docs)} documents for {sheet_name}")
+                    return  # Success
+                    
+                except Exception as e:
+                    error_msg = str(e).lower()
+                    # Check if it's a database locking error
+                    if "unable to open database" in error_msg or "database is locked" in error_msg or "code: 14" in error_msg:
+                        if attempt < max_retries - 1:
+                            logger.warning(
+                                f"Database locked while indexing {sheet_name} (attempt {attempt + 1}/{max_retries}). "
+                                f"Retrying in {retry_delay}s..."
+                            )
+                            import time
+                            time.sleep(retry_delay)
+                            retry_delay *= 2  # Exponential backoff
+                            continue
+                        else:
+                            logger.error(
+                                f"Error indexing sheet {sheet_name}: Database is locked after {max_retries} attempts. "
+                                f"This is normal when multiple workers are starting. The index will be created on next sync."
+                            )
+                            return  # Give up after max retries
+                    else:
+                        # Other errors - log and return
+                        logger.error(f"Error indexing sheet {sheet_name}: {e}")
+                        return
             
         except Exception as e:
             logger.error(f"Error indexing sheet {sheet_name}: {e}")

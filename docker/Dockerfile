@@ -61,8 +61,13 @@ COPY tools/ ./tools/
 COPY config/ ./config/
 COPY scripts/ ./scripts/
 
-# Create necessary directories first
-RUN mkdir -p /app/memory_db /app/sheets_index_db /app/logs /app/credentials
+# Copy and set up entrypoint script (before switching users)
+COPY docker/entrypoint.sh /entrypoint.sh
+
+# Create necessary directories first with proper permissions
+RUN mkdir -p /app/memory_db /app/sheets_index_db /app/logs /app/credentials && \
+    chmod 755 /app/memory_db /app/sheets_index_db /app/logs /app/credentials && \
+    chmod +x /entrypoint.sh
 
 # Create cache directory for uv with proper permissions
 RUN mkdir -p /home/appuser/.cache/uv && \
@@ -70,7 +75,9 @@ RUN mkdir -p /home/appuser/.cache/uv && \
 
 # Credentials are not baked into the image for security.
 # Mount them at runtime (e.g., docker-compose volume) to /app/credentials/google-sheets-service-account.json
-RUN chown -R appuser:appuser /app
+# Set ownership and permissions for app directories and entrypoint
+RUN chown -R appuser:appuser /app /entrypoint.sh && \
+    chmod -R 755 /app/memory_db /app/sheets_index_db /app/logs
 
 # Set environment variables
 ENV PYTHONUNBUFFERED=1 \
@@ -85,6 +92,9 @@ USER appuser
 
 # Expose port
 EXPOSE 8009
+
+# Set entrypoint
+ENTRYPOINT ["/entrypoint.sh"]
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
