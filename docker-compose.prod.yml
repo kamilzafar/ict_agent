@@ -31,6 +31,9 @@ services:
       - "${API_PORT:-8009}:8009"
     env_file:
       - .env
+    environment:
+      - CHROMA_DB_PATH=/app/sheets_index_db
+      - MEMORY_DB_PATH=/app/memory_db
     
     volumes:
       # Persist memory database (bind mount for easy backup/access)

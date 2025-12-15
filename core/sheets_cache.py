@@ -31,7 +31,7 @@ class GoogleSheetsCacheService:
         redis_port: int = 6379,
         redis_password: Optional[str] = None,
         redis_db: int = 0,
-        chroma_db_path: str = "./sheets_index_db"
+        chroma_db_path: str = "/app/sheets_index_db"
     ):
         """Initialize the Google Sheets cache service.
         

@@ -129,12 +129,12 @@ async def lifespan(app: FastAPI):
                 redis_port=int(os.getenv("REDIS_PORT", "6379")),
                 redis_password=os.getenv("REDIS_PASSWORD"),
                 redis_db=int(os.getenv("REDIS_DB", "0")),
-                chroma_db_path=os.getenv("CHROMA_DB_PATH", "./sheets_index_db")
+                chroma_db_path=os.getenv("CHROMA_DB_PATH", "/app/sheets_index_db")
             )
             
             # Pre-load all sheets on startup (only from one worker to avoid DB locking)
             # Use file lock to ensure only one worker pre-loads
-            lock_file_path = Path(os.getenv("CHROMA_DB_PATH", "./sheets_index_db")) / ".preload.lock"
+            lock_file_path = Path(os.getenv("CHROMA_DB_PATH", "/app/sheets_index_db")) / ".preload.lock"
             lock_file_path.parent.mkdir(parents=True, exist_ok=True)
             
             should_preload = False
@@ -240,13 +240,13 @@ async def lifespan(app: FastAPI):
         agent = IntelligentChatAgent(
             model_name=os.getenv("MODEL_NAME", "gpt-4.1-mini"),  # Default to gpt-4.1-mini for 128k context window
             temperature=float(os.getenv("TEMPERATURE", "0.7")),
-            memory_db_path=os.getenv("MEMORY_DB_PATH", "./memory_db"),
+            memory_db_path=os.getenv("MEMORY_DB_PATH", "/app/memory_db"),
             summarize_interval=int(os.getenv("SUMMARIZE_INTERVAL", "10")),
             sheets_cache_service=sheets_cache_service
         )
         logger.info("Agent initialized successfully")
         logger.info(f"Model: {os.getenv('MODEL_NAME', 'gpt-4.1-mini')}")
-        logger.info(f"Memory DB: {os.getenv('MEMORY_DB_PATH', './memory_db')}")
+        logger.info(f"Memory DB: {os.getenv('MEMORY_DB_PATH', '/app/memory_db')}")
     except ValueError as e:
         logger.error(f"Configuration error: {e}")
         raise

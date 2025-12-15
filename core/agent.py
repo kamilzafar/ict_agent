@@ -36,7 +36,7 @@ class IntelligentChatAgent:
         self,
         model_name: str = "gpt-4.1-mini",  # Changed to gpt-4.1-mini for 128k context window
         temperature: float = 0.7,
-        memory_db_path: str = "./memory_db",
+        memory_db_path: str = "/app/memory_db",
         summarize_interval: int = 10,
         sheets_cache_service: Optional[Any] = None
     ):

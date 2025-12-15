@@ -16,7 +16,7 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 class LongTermMemory:
     """Manages long-term memory using ChromaDB vector store."""
     
-    def __init__(self, persist_directory: str = "./memory_db", collection_name: str = "conversations"):
+    def __init__(self, persist_directory: str = "/app/memory_db", collection_name: str = "conversations"):
         """Initialize the memory system.
         
         Args:
