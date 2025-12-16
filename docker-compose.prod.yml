@@ -25,9 +25,6 @@ services:
       - with-redis  # Only start Redis if explicitly requested: docker compose --profile with-redis up
 
   api:
-    build:
-      context: .
-      dockerfile: docker/Dockerfile
     image: kamilzafar/ict_agent:latest
     container_name: ict_agent_api
     ports:
