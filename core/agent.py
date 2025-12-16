@@ -2,8 +2,11 @@
 import os
 import re
 import uuid
+import logging
 from typing import Annotated, TypedDict, List, Dict, Any, Optional, TYPE_CHECKING
 from datetime import datetime
+
+logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from core.sheets_cache import GoogleSheetsCacheService
@@ -166,48 +169,39 @@ You help leads with course enrollment through WhatsApp conversations."""
         return workflow
     
     def _retrieve_context(self, state: AgentState) -> AgentState:
-        """Retrieve relevant context from long-term memory."""
-        messages = state["messages"]
+        """Retrieve relevant context from long-term memory.
         
-        # Get the last user message
-        user_message = None
-        for msg in reversed(messages):
-            if isinstance(msg, HumanMessage):
-                user_message = msg.content
-                break
+        IMPORTANT: Only retrieves context from the current conversation.
+        We don't search across conversations to avoid confusion.
+        """
+        conversation_id = state.get("conversation_id")
         
-        if user_message:
-            conversation_id = state.get("conversation_id")
+        if not conversation_id:
+            return state
+        
+        # Get conversation summary for current conversation only
+        # This is the only context we need - the summary of previous turns in this conversation
+        current_summary = self.memory.get_conversation_summary(conversation_id)
+        
+        if current_summary:
+            # Format context text for system prompt
+            context_text = f"[Current conversation summary]: {current_summary}"
+            state["retrieved_context"] = context_text
             
-            # Search for relevant context from summaries (cached, only searches summaries)
-            relevant_docs = self.memory.search_relevant_context(
-                query=user_message,
-                k=3,  # Reduced from 5 for efficiency
-                conversation_id=conversation_id,
-                use_cache=True  # Use cache to avoid redundant searches
+            # Store context document for response (for debugging/tracking)
+            from langchain_core.documents import Document
+            summary_doc = Document(
+                page_content=current_summary,
+                metadata={
+                    "conversation_id": conversation_id,
+                    "type": "summary"
+                }
             )
-            
-            # Format context (limit to prevent token overflow)
-            context_texts = []
-            for doc in relevant_docs[:3]:  # Max 3 summaries
-                context_texts.append(f"[Previous conversation summary]: {doc.page_content}")
-            
-            # Also get conversation summary for current conversation if available
-            if conversation_id:
-                current_summary = self.memory.get_conversation_summary(conversation_id)
-                if current_summary:
-                    # Check if summary is not already in context_texts
-                    summary_already_included = any(current_summary in text for text in context_texts)
-                    if not summary_already_included:
-                        context_texts.insert(0, f"[Current conversation summary]: {current_summary}")
-            
-            if context_texts:
-                # Store context in state for use in system prompt
-                # Don't add as SystemMessage here as it will be filtered out
-                state["context"] = [{"content": doc.page_content, "metadata": doc.metadata} 
-                                   for doc in relevant_docs[:3]]
-                # Store formatted context text for system prompt
-                state["retrieved_context"] = "\n\n".join(context_texts)
+            state["context"] = [{"content": summary_doc.page_content, "metadata": summary_doc.metadata}]
+        else:
+            # No summary yet (conversation is new or hasn't been summarized)
+            state["retrieved_context"] = ""
+            state["context"] = []
         
         return state
     
@@ -332,8 +326,14 @@ You help leads with course enrollment through WhatsApp conversations."""
             return "continue"
         
         # Check if we should summarize (every N turns)
+        # Summarize AFTER every N messages (e.g., after turn 10, 20, 30, etc.)
         turn_count = state.get("turn_count", 0)
-        if turn_count > 0 and turn_count % self.summarize_interval == 0:
+        
+        # Only summarize when we've completed a full interval (turn 10, 20, 30, etc.)
+        # turn_count is 1-indexed (turn 1, 2, 3, ..., 10, 11, ...)
+        # So we summarize after turn 10, 20, 30, etc.
+        if turn_count >= self.summarize_interval and turn_count % self.summarize_interval == 0:
+            logger.info(f"Triggering summarization: turn_count={turn_count}, interval={self.summarize_interval}")
             return "summarize"
         
         # Otherwise, end (response is complete)
@@ -399,16 +399,22 @@ Summary:"""
         # Save summary to memory (this updates/replaces the old one)
         self.memory.add_summary(conversation_id, summary)
         
-        # Remove the summarized messages from state
-        # Keep system messages and any messages before the ones we're summarizing
-        system_messages = [msg for msg in messages if isinstance(msg, SystemMessage)]
+        # IMPORTANT: Don't remove summarized messages from state
+        # The unsummarized messages (since last summary) should remain in context
+        # The summary is stored in memory and will be loaded in future turns via get_conversation_summary()
+        # But the recent unsummarized messages stay in the conversation for immediate context
         
-        # Remove the last N conversation messages (the ones we just summarized)
-        messages_to_keep = conversation_messages[:-self.summarize_interval]
+        # Log summarization for debugging
+        turn_count = state.get("turn_count", 0)
+        start_turn = turn_count - self.summarize_interval + 1
+        end_turn = turn_count
+        logger.info(f"✓ Summarized turns {start_turn}-{end_turn} for conversation {conversation_id}")
+        logger.info(f"  Summary length: {len(summary)} characters")
+        logger.info(f"  Unsummarized messages remain in context for next turns")
         
-        # Reconstruct state with only kept messages + system messages
-        state["messages"] = system_messages + messages_to_keep
-
+        # Don't modify messages - keep them in state for context
+        # The summary will be loaded in future turns via get_conversation_summary()
+        # The unsummarized messages (turns since last summary) will be loaded in chat() method
         return state
 
     def _extract_and_update_lead_data(self, conversation_id: str, messages: List[BaseMessage]):

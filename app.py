@@ -9,9 +9,6 @@ from typing import Optional, List, Dict, Any
 from datetime import datetime
 from pathlib import Path
 
-# Import fcntl only on Unix systems
-if sys.platform != "win32":
-    import fcntl
 
 from fastapi import FastAPI, HTTPException, status, Request, Header, Depends, Security
 from fastapi.middleware.cors import CORSMiddleware
@@ -124,118 +121,86 @@ async def lifespan(app: FastAPI):
         
         if (has_service_account or has_oauth2) and has_spreadsheet_id:
             logger.info("Initializing Google Sheets cache service...")
-            sheets_cache_service = GoogleSheetsCacheService(
-                redis_host=os.getenv("REDIS_HOST", "localhost"),
-                redis_port=int(os.getenv("REDIS_PORT", "6379")),
-                redis_password=os.getenv("REDIS_PASSWORD"),
-                redis_db=int(os.getenv("REDIS_DB", "0")),
-                chroma_db_path=os.getenv("CHROMA_DB_PATH", "/app/sheets_index_db")
-            )
-            
-            # Pre-load all sheets on startup (only from one worker to avoid DB locking)
-            # Use file lock to ensure only one worker pre-loads
-            lock_file_path = Path(os.getenv("CHROMA_DB_PATH", "/app/sheets_index_db")) / ".preload.lock"
-            lock_file_path.parent.mkdir(parents=True, exist_ok=True)
-            
-            should_preload = False
-            lock_file = None
-            
             try:
-                # Try to acquire lock (non-blocking)
-                lock_file = open(lock_file_path, 'w')
-                try:
-                    # Try to acquire exclusive lock (non-blocking)
-                    if sys.platform != "win32":
-                        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-                    else:
-                        # Windows: use msvcrt for file locking
-                        import msvcrt
-                        msvcrt.locking(lock_file.fileno(), msvcrt.LK_NBLCK, 1)
-                    
-                    should_preload = True
-                    logger.info("Acquired pre-load lock - this worker will pre-load sheets")
-                except (IOError, OSError, BlockingIOError):
-                    # Another worker has the lock
-                    logger.info("Another worker is pre-loading sheets - skipping pre-load")
-                    should_preload = False
-            except ImportError:
-                # fcntl not available (Windows), use simple file existence check
-                if lock_file_path.exists():
-                    logger.info("Pre-load lock file exists - another worker is pre-loading sheets")
-                    should_preload = False
-                else:
-                    # Create lock file
-                    try:
-                        lock_file_path.write_text(str(os.getpid()))
-                        should_preload = True
-                        logger.info("Created pre-load lock - this worker will pre-load sheets")
-                    except Exception as e:
-                        logger.warning(f"Could not create pre-load lock: {e}. Skipping pre-load.")
-                        should_preload = False
-            except Exception as e:
-                logger.warning(f"Could not acquire pre-load lock: {e}. Skipping pre-load to avoid conflicts.")
+                sheets_cache_service = GoogleSheetsCacheService(
+                    redis_host=os.getenv("REDIS_HOST", "localhost"),
+                    redis_port=int(os.getenv("REDIS_PORT", "6379")),
+                    redis_password=os.getenv("REDIS_PASSWORD"),
+                    redis_db=int(os.getenv("REDIS_DB", "0")),
+                    chroma_db_path=os.getenv("CHROMA_DB_PATH", "/app/sheets_index_db")
+                )
+                
+                # Pre-load all sheets on startup (only from one worker to avoid DB locking)
+                # Use file lock to ensure only one worker pre-loads
+                lock_file_path = Path(os.getenv("CHROMA_DB_PATH", "/app/sheets_index_db")) / ".preload.lock"
+                lock_file_path.parent.mkdir(parents=True, exist_ok=True)
+                
                 should_preload = False
-            
-            if should_preload:
-                logger.info("Pre-loading Google Sheets data...")
-                try:
-                    sheets_cache_service.preload_all_sheets()
-                    logger.info("Google Sheets cache initialized successfully")
-                except Exception as e:
-                    logger.error(f"Error pre-loading sheets: {e}")
-                    logger.warning("Continuing without pre-loaded sheets - will retry on first webhook")
-                finally:
-                    # Release lock
-                    if lock_file:
-                        try:
-                            if sys.platform != "win32":
-                                fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
-                            else:
-                                try:
-                                    import msvcrt
-                                    msvcrt.locking(lock_file.fileno(), msvcrt.LK_UNLCK, 1)
-                                except ImportError:
-                                    pass
-                            lock_file.close()
-                        except Exception as e:
-                            logger.warning(f"Error releasing lock: {e}")
-                    # Remove lock file
-                    try:
-                        if lock_file_path.exists():
-                            lock_file_path.unlink()
-                    except Exception as e:
-                        logger.warning(f"Error removing lock file: {e}")
-            else:
-                # Wait a bit for the other worker to finish pre-loading
-                logger.info("Waiting for pre-load to complete...")
-                max_wait = 60  # Wait up to 60 seconds
-                wait_interval = 2
-                waited = 0
-                while waited < max_wait:
-                    if not lock_file_path.exists():
-                        logger.info("Pre-load completed by another worker")
-                        break
-                    time.sleep(wait_interval)
-                    waited += wait_interval
+                lock_file = None
+                
+                if not lock_file_path.exists():
+                    should_preload = True
                 else:
-                    logger.warning("Pre-load lock still present after waiting - continuing anyway")
-                if lock_file:
-                    lock_file.close()
-            
-            # Start fallback polling task
-            polling_task = asyncio.create_task(fallback_polling_task(sheets_cache_service))
-            logger.info("Background polling task started")
+                    with open(lock_file_path, "r") as f:
+                        lock_file = f.read()
+                        if lock_file.strip() == "1":
+                            should_preload = False
+                        else:
+                            should_preload = True
+                            
+                if should_preload:
+                    logger.info("Pre-loading sheets...")
+                    with open(lock_file_path, "w") as f:
+                        f.write("1")
+                    try:
+                        sheets_cache_service.preload_all_sheets()
+                        logger.info("Sheets pre-loaded successfully")
+                    except Exception as e:
+                        logger.error(f"Error pre-loading sheets: {e}", exc_info=True)
+                        # Don't raise - app can still work without pre-loaded sheets
+                    finally:
+                        if lock_file:
+                            with open(lock_file_path, "w") as f:
+                                f.write("0")
+                        lock_file_path.unlink()
+                else:
+                    logger.info("Sheets already pre-loaded")
+                    
+                logger.info("✓ Google Sheets cache service initialized successfully")
+            except Exception as sheets_error:
+                # Google Sheets initialization failed - log warning but don't crash app
+                logger.warning("=" * 70)
+                logger.warning("⚠️  Google Sheets cache service initialization failed!")
+                logger.warning(f"Error: {sheets_error}")
+                logger.warning("The app will continue without Google Sheets caching.")
+                logger.warning("")
+                logger.warning("To fix Google Sheets authentication:")
+                if has_oauth2:
+                    logger.warning("  1. Verify OAuth2 credentials in .env:")
+                    logger.warning("     - GOOGLE_SHEETS_CLIENT_ID")
+                    logger.warning("     - GOOGLE_SHEETS_CLIENT_SECRET")
+                    logger.warning("     - GOOGLE_SHEETS_REFRESH_TOKEN")
+                    logger.warning("  2. Check that refresh token is valid (not expired/revoked)")
+                    logger.warning("  3. Verify OAuth2 client exists in Google Cloud Console")
+                else:
+                    logger.warning("  1. Set GOOGLE_SHEETS_CREDENTIALS_PATH to service account JSON")
+                    logger.warning("  2. Or configure OAuth2 credentials")
+                logger.warning("  4. Verify GOOGLE_SHEETS_SPREADSHEET_ID is correct")
+                logger.warning("  5. Restart the application after fixing credentials")
+                logger.warning("=" * 70)
+                sheets_cache_service = None  # Set to None so agent can still initialize
         else:
-            logger.warning(
-                "Google Sheets not configured - skipping cache service initialization. "
-                "Configure either GOOGLE_SHEETS_CREDENTIALS_PATH (service account) or "
-                "GOOGLE_SHEETS_CLIENT_ID/CLIENT_SECRET/REFRESH_TOKEN (OAuth2)"
-            )
+            logger.info("Google Sheets not configured - skipping cache service initialization")
+            logger.info("To enable Google Sheets, set:")
+            logger.info("  - GOOGLE_SHEETS_SPREADSHEET_ID")
+            logger.info("  - Either GOOGLE_SHEETS_CREDENTIALS_PATH (service account)")
+            logger.info("    Or GOOGLE_SHEETS_CLIENT_ID/CLIENT_SECRET/REFRESH_TOKEN (OAuth2)")
+            sheets_cache_service = None
     except Exception as e:
-        logger.error(f"Error initializing Google Sheets cache service: {e}", exc_info=True)
-        logger.warning("Continuing without Google Sheets cache - agent will work but without sheet data")
-        sheets_cache_service = None  # Ensure it's set to None on error
-    
+        # Catch any unexpected errors and make Google Sheets optional
+        logger.warning(f"Unexpected error during Google Sheets initialization: {e}", exc_info=True)
+        logger.warning("Continuing without Google Sheets cache service")
+        sheets_cache_service = None
     try:
         agent = IntelligentChatAgent(
             model_name=os.getenv("MODEL_NAME", "gpt-4.1-mini"),  # Default to gpt-4.1-mini for 128k context window

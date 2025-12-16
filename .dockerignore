@@ -71,3 +71,6 @@ Dockerfile*
 .travis.yml
 
 sheets_index_db/
+
+test_stages.bat
+test_stages.py

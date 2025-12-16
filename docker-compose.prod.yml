@@ -25,15 +25,38 @@ services:
       - with-redis  # Only start Redis if explicitly requested: docker compose --profile with-redis up
 
   api:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
     image: kamilzafar/ict_agent:latest
     container_name: ict_agent_api
     ports:
-      - "${API_PORT:-8009}:8009"
+      - "${API_PORT:-8009}:8009"  # Expose API port for OAuth2 callbacks
     env_file:
       - .env
     environment:
       - CHROMA_DB_PATH=/app/sheets_index_db
       - MEMORY_DB_PATH=/app/memory_db
+      - ENVIRONMENT=production
+      # Google Sheets OAuth2 Configuration (optional - app works without it)
+      - GOOGLE_SHEETS_CLIENT_ID=${GOOGLE_SHEETS_CLIENT_ID:-}
+      - GOOGLE_SHEETS_CLIENT_SECRET=${GOOGLE_SHEETS_CLIENT_SECRET:-}
+      - GOOGLE_SHEETS_REFRESH_TOKEN=${GOOGLE_SHEETS_REFRESH_TOKEN:-}
+      # Google Sheets Service Account Configuration (alternative to OAuth2)
+      - GOOGLE_SHEETS_CREDENTIALS_PATH=${GOOGLE_SHEETS_CREDENTIALS_PATH:-}
+      # Google Sheets Spreadsheet Configuration
+      - GOOGLE_SHEETS_SPREADSHEET_ID=${GOOGLE_SHEETS_SPREADSHEET_ID:-}
+      - GOOGLE_SHEETS_SHEET_NAMES=${GOOGLE_SHEETS_SHEET_NAMES:-}
+    
+    # Resource limits to prevent OOM kills during ChromaDB indexing
+    deploy:
+      resources:
+        limits:
+          cpus: '4'
+          memory: 8G
+        reservations:
+          cpus: '2'
+          memory: 4G
     
     volumes:
       # Persist memory database (bind mount for easy backup/access)
@@ -53,12 +76,13 @@ services:
     restart: unless-stopped
     
     # Health check
+    # Increased start_period to allow time for ChromaDB indexing of large sheets
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8009/health"]
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 40s
+      start_period: 120s  # 2 minutes to allow indexing of large sheets (e.g., FAQs with 323 rows)
     
     # Logging configuration
     logging:

@@ -1,11 +1,14 @@
 """Long-term memory system for the agent using vector store."""
 import os
 import threading
+import logging
 from typing import List, Dict, Any, Optional
 from datetime import datetime
 import json
 from functools import lru_cache
 import hashlib
+
+logger = logging.getLogger(__name__)
 
 from langchain_chroma import Chroma
 from langchain_core.documents import Document
@@ -346,12 +349,27 @@ class LongTermMemory:
         try:
             results = self.vectorstore.similarity_search(
                 query,
-                k=k,
+                k=k * 2 if conversation_id else k,  # Get more results if filtering, then filter manually
                 filter=where_filter
             )
-        except Exception:
-            # Fallback if filter doesn't work
-            results = self.vectorstore.similarity_search(query, k=k)
+        except Exception as e:
+            # Fallback if filter doesn't work - search without filter then filter manually
+            logger.warning(f"ChromaDB filter failed, using manual filtering: {e}")
+            results = self.vectorstore.similarity_search(query, k=k * 3)
+        
+        # CRITICAL: Manually filter by conversation_id if provided
+        # This ensures we never return context from wrong conversations
+        if conversation_id:
+            filtered_results = []
+            for doc in results:
+                doc_conv_id = doc.metadata.get("conversation_id")
+                # Only include documents from the current conversation
+                if doc_conv_id == conversation_id:
+                    filtered_results.append(doc)
+                # Stop once we have enough results
+                if len(filtered_results) >= k:
+                    break
+            results = filtered_results
         
         # Cache results (thread-safe)
         if use_cache:

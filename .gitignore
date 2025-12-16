@@ -53,3 +53,5 @@ credential.json
 sheets_index_db/
 
 token.pickle
+
+logs/
