@@ -70,6 +70,10 @@ jobs:
             # Navigate to application directory
             cd ~/agent || cd /root/agent || exit 1
             
+            # Ensure data directories exist with proper permissions
+            mkdir -p memory_db sheets_index_db logs
+            chmod -R 755 memory_db sheets_index_db logs || true
+            
             # Pull the latest Docker image
             docker pull ${{ env.DOCKER_IMAGE }}:${{ env.DOCKER_TAG }}
             

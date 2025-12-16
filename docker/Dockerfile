@@ -35,9 +35,11 @@ FROM python:3.13-slim AS runtime
 
 # Install minimal runtime dependencies
 # ChromaDB and other libraries may need these at runtime
+# gosu is needed for clean user switching in entrypoint
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     ca-certificates \
+    gosu \
     && rm -rf /var/lib/apt/lists/* \
     && apt-get clean
 
@@ -87,8 +89,9 @@ ENV PYTHONUNBUFFERED=1 \
     PYTHONPATH="/app" \
     UV_CACHE_DIR=/home/appuser/.cache/uv
 
-# Switch to non-root user
-USER appuser
+# Keep as root for entrypoint to fix permissions on mounted volumes
+# Entrypoint will switch to appuser after fixing permissions
+USER root
 
 # Expose port
 EXPOSE 8009
