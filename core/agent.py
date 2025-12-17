@@ -21,6 +21,7 @@ from langgraph.checkpoint.memory import MemorySaver
 from core.memory import LongTermMemory
 from tools.mcp_rag_tools import get_mcp_rag_tools
 from tools.sheets_tools import create_google_sheets_tools
+from tools.template_tools import template_tools
 from core.context_injector import ContextInjector
 
 
@@ -84,12 +85,13 @@ class IntelligentChatAgent:
                 "Please check your OPENAI_API_KEY is valid and the model name is correct."
             ) from e
         
-        # Get available tools (MCP RAG tools + Google Sheets tools)
+        # Get available tools (MCP RAG tools + Google Sheets tools + Template tools)
         self.mcp_rag_tools = get_mcp_rag_tools(sheets_cache_service)
         self.sheets_tools = create_google_sheets_tools(sheets_cache_service) if sheets_cache_service else []
-        
+        self.template_tools = template_tools  # Always available
+
         # Combine all tools
-        all_tools = self.mcp_rag_tools + self.sheets_tools
+        all_tools = self.mcp_rag_tools + self.sheets_tools + self.template_tools
         
         # Bind tools to LLM if available
         if all_tools:
