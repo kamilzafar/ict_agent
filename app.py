@@ -269,11 +269,24 @@ def validate_session(session_id: str) -> bool:
 
 def verify_admin_session(admin_session: Optional[str] = Cookie(None)):
     """Dependency for admin endpoints - validates session cookie."""
-    if not admin_session or not validate_session(admin_session):
+    logger.debug(f"Session validation - Cookie received: {admin_session is not None}")
+    logger.debug(f"Active sessions count: {len(admin_sessions)}")
+
+    if not admin_session:
+        logger.warning("No session cookie provided")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid or expired session. Please login again."
         )
+
+    if not validate_session(admin_session):
+        logger.warning(f"Invalid session: {admin_session[:10]}...")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid or expired session. Please login again."
+        )
+
+    logger.debug(f"Session validated successfully: {admin_session[:10]}...")
     return admin_session
 
 
@@ -1034,21 +1047,20 @@ async def admin_login(request: LoginRequest, response: Response):
     # Create session
     session_id = create_session()
 
-    # Set secure cookie with production-friendly settings
-    # Use Lax instead of Strict for better compatibility with nginx proxy
-    is_production = os.getenv("ENVIRONMENT", "development") == "production"
-
+    # Set cookie with relaxed settings for nginx proxy compatibility
+    # Note: Removed 'secure' flag to work with nginx SSL termination
     response.set_cookie(
         key="admin_session",
         value=session_id,
         httponly=True,
-        secure=is_production,  # Only send over HTTPS in production
-        samesite="lax",  # Changed from "strict" for better compatibility
+        samesite="lax",  # Lax for better compatibility with nginx proxy
         max_age=315360000,  # 10 years - essentially never expires
-        path="/"  # Ensure cookie works for all paths
+        path="/",  # Ensure cookie works for all paths
+        domain=None  # Let browser determine domain automatically
     )
 
     logger.info(f"Admin login successful: {username}")
+    logger.info(f"Session created: {session_id[:10]}... (total sessions: {len(admin_sessions)})")
 
     return {"success": True, "message": "Logged in successfully"}
 
