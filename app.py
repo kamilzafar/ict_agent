@@ -249,32 +249,22 @@ async def lifespan(app: FastAPI):
 # Admin Session Management
 # ============================================================================
 
-# In-memory session storage
+# In-memory session storage (no expiration)
+# Sessions persist until logout or server restart
 # For production with multiple workers, consider using Redis
-admin_sessions: Dict[str, datetime] = {}  # session_id -> expiry_time
-ADMIN_SESSION_TIMEOUT = int(os.getenv("ADMIN_SESSION_TIMEOUT", "3600"))  # 1 hour default
+admin_sessions: set = set()  # session_id set (no expiration)
 
 
 def create_session() -> str:
-    """Create new admin session with timeout."""
+    """Create new admin session that never expires."""
     session_id = secrets.token_urlsafe(32)
-    admin_sessions[session_id] = datetime.now() + timedelta(seconds=ADMIN_SESSION_TIMEOUT)
+    admin_sessions.add(session_id)
     return session_id
 
 
 def validate_session(session_id: str) -> bool:
-    """Validate admin session and extend if valid."""
-    if session_id not in admin_sessions:
-        return False
-
-    if datetime.now() > admin_sessions[session_id]:
-        # Session expired - remove it
-        del admin_sessions[session_id]
-        return False
-
-    # Valid session - extend the expiry (sliding expiration)
-    admin_sessions[session_id] = datetime.now() + timedelta(seconds=ADMIN_SESSION_TIMEOUT)
-    return True
+    """Validate admin session (no expiration check)."""
+    return session_id in admin_sessions
 
 
 def verify_admin_session(admin_session: Optional[str] = Cookie(None)):
@@ -1054,7 +1044,7 @@ async def admin_login(request: LoginRequest, response: Response):
         httponly=True,
         secure=is_production,  # Only send over HTTPS in production
         samesite="lax",  # Changed from "strict" for better compatibility
-        max_age=ADMIN_SESSION_TIMEOUT,
+        max_age=315360000,  # 10 years - essentially never expires
         path="/"  # Ensure cookie works for all paths
     )
 
@@ -1316,7 +1306,7 @@ async def admin_logout(response: Response, admin_session: Optional[str] = Cookie
     Logout admin user and clear session.
     """
     if admin_session and admin_session in admin_sessions:
-        del admin_sessions[admin_session]
+        admin_sessions.discard(admin_session)  # Remove from set
 
     # Clear cookie with same settings as login
     response.delete_cookie(
