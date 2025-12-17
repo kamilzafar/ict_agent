@@ -1044,13 +1044,18 @@ async def admin_login(request: LoginRequest, response: Response):
     # Create session
     session_id = create_session()
 
-    # Set secure cookie
+    # Set secure cookie with production-friendly settings
+    # Use Lax instead of Strict for better compatibility with nginx proxy
+    is_production = os.getenv("ENVIRONMENT", "development") == "production"
+
     response.set_cookie(
         key="admin_session",
         value=session_id,
         httponly=True,
-        samesite="strict",
-        max_age=ADMIN_SESSION_TIMEOUT
+        secure=is_production,  # Only send over HTTPS in production
+        samesite="lax",  # Changed from "strict" for better compatibility
+        max_age=ADMIN_SESSION_TIMEOUT,
+        path="/"  # Ensure cookie works for all paths
     )
 
     logger.info(f"Admin login successful: {username}")
@@ -1313,8 +1318,11 @@ async def admin_logout(response: Response, admin_session: Optional[str] = Cookie
     if admin_session and admin_session in admin_sessions:
         del admin_sessions[admin_session]
 
-    # Clear cookie
-    response.delete_cookie("admin_session")
+    # Clear cookie with same settings as login
+    response.delete_cookie(
+        key="admin_session",
+        path="/"
+    )
 
     return {"success": True, "message": "Logged out successfully"}
 
