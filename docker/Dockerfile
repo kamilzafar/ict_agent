@@ -62,13 +62,14 @@ COPY core/ ./core/
 COPY tools/ ./tools/
 COPY config/ ./config/
 COPY scripts/ ./scripts/
+COPY static/ ./static/
 
 # Copy and set up entrypoint script (before switching users)
 COPY docker/entrypoint.sh /entrypoint.sh
 
 # Create necessary directories first with proper permissions
-RUN mkdir -p /app/memory_db /app/sheets_index_db /app/logs /app/credentials && \
-    chmod 755 /app/memory_db /app/sheets_index_db /app/logs /app/credentials && \
+RUN mkdir -p /app/memory_db /app/sheets_index_db /app/logs /app/credentials /app/static && \
+    chmod 755 /app/memory_db /app/sheets_index_db /app/logs /app/credentials /app/static && \
     chmod +x /entrypoint.sh
 
 # Create cache directory for uv with proper permissions
