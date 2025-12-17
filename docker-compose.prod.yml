@@ -63,6 +63,10 @@ services:
       - ./memory_db:/app/memory_db
       # Persist ChromaDB index (for Google Sheets semantic search)
       - ./sheets_index_db:/app/sheets_index_db
+      # Mount config for hot-reload (template editor)
+      - ./config:/app/config
+      # Mount static files for admin UI
+      - ./static:/app/static:ro
       # Optional: Mount logs directory for debugging
       - ./logs:/app/logs
       # Optional: Mount credentials if using service account (uncomment if needed)

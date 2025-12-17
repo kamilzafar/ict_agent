@@ -1,7 +1,15 @@
 {
   "permissions": {
     "allow": [
-      "Bash(powershell:*)"
+      "Bash(powershell:*)",
+      "Bash(git -C \"C:\\Users\\User\\desktop\\ICT_AGENT\\ict_agent\" log --oneline -15)",
+      "Bash(git -C \"C:\\Users\\User\\desktop\\ICT_AGENT\\ict_agent\" status)",
+      "Bash(if [ -f \"C:\\Users\\User\\desktop\\ICT_AGENT\\ict_agent\\.env\" ])",
+      "Bash(then echo \"exists\")",
+      "Bash(else echo \"not found\")",
+      "Bash(fi)",
+      "Bash(python:*)"
     ]
-  }
+  },
+  "outputStyle": "default"
 }

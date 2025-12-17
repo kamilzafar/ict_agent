@@ -1,0 +1,636 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ICT Agent - Template Editor</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            overflow-x: hidden;
+        }
+
+        #app {
+            display: none;
+        }
+
+        .sidebar {
+            height: calc(100vh - 56px);
+            overflow-y: auto;
+            background-color: #f8f9fa;
+            border-right: 1px solid #dee2e6;
+        }
+
+        .template-item {
+            cursor: pointer;
+            padding: 12px 15px;
+            border-bottom: 1px solid #e9ecef;
+            transition: background-color 0.2s;
+        }
+
+        .template-item:hover {
+            background-color: #e9ecef;
+        }
+
+        .template-item.active {
+            background-color: #0d6efd;
+            color: white;
+        }
+
+        .template-item.active:hover {
+            background-color: #0b5ed7;
+        }
+
+        .template-name {
+            font-weight: 600;
+            font-size: 0.9rem;
+            margin-bottom: 4px;
+        }
+
+        .template-desc {
+            font-size: 0.75rem;
+            opacity: 0.8;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .main-content {
+            height: calc(100vh - 56px);
+            overflow-y: auto;
+        }
+
+        .editor-panel, .preview-panel {
+            height: calc(100vh - 56px);
+            overflow-y: auto;
+        }
+
+        .preview-content {
+            background-color: #f8f9fa;
+            padding: 20px;
+            border-radius: 8px;
+            min-height: 200px;
+            white-space: pre-wrap;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            line-height: 1.6;
+        }
+
+        .login-container {
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        }
+
+        .login-card {
+            width: 100%;
+            max-width: 400px;
+        }
+
+        .toast-container {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            z-index: 9999;
+        }
+
+        .language-tabs {
+            margin-bottom: 15px;
+        }
+
+        textarea.form-control {
+            font-family: 'Courier New', monospace;
+            font-size: 0.9rem;
+        }
+
+        .btn-add-template {
+            position: sticky;
+            top: 0;
+            z-index: 10;
+        }
+
+        .search-box {
+            position: sticky;
+            top: 60px;
+            z-index: 9;
+            background-color: #f8f9fa;
+            padding: 10px;
+            border-bottom: 1px solid #dee2e6;
+        }
+
+        .badge-language {
+            font-size: 0.7rem;
+            margin-right: 3px;
+        }
+
+        #loadingOverlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0,0,0,0.5);
+            display: none;
+            align-items: center;
+            justify-content: center;
+            z-index: 99999;
+        }
+    </style>
+</head>
+<body>
+    <!-- Loading Overlay -->
+    <div id="loadingOverlay">
+        <div class="spinner-border text-light" style="width: 3rem; height: 3rem;" role="status">
+            <span class="visually-hidden">Loading...</span>
+        </div>
+    </div>
+
+    <!-- Toast Container -->
+    <div class="toast-container"></div>
+
+    <!-- Login Screen -->
+    <div id="loginScreen" class="login-container">
+        <div class="login-card">
+            <div class="card shadow-lg">
+                <div class="card-body p-5">
+                    <div class="text-center mb-4">
+                        <h3 class="fw-bold">ICT Agent</h3>
+                        <p class="text-muted">Template Editor</p>
+                    </div>
+                    <form id="loginForm">
+                        <div class="mb-3">
+                            <label for="username" class="form-label">Username</label>
+                            <input type="text" class="form-control" id="username" required autocomplete="username">
+                        </div>
+                        <div class="mb-3">
+                            <label for="password" class="form-label">Password</label>
+                            <input type="password" class="form-control" id="password" required autocomplete="current-password">
+                        </div>
+                        <button type="submit" class="btn btn-primary w-100">Login</button>
+                    </form>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Main App -->
+    <div id="app">
+        <!-- Navbar -->
+        <nav class="navbar navbar-dark bg-primary">
+            <div class="container-fluid">
+                <span class="navbar-brand mb-0 h1">
+                    <strong>ICT Agent</strong> - Template Editor
+                </span>
+                <div class="d-flex align-items-center">
+                    <span class="text-white me-3 small" id="templateCount">0 templates</span>
+                    <button class="btn btn-outline-light btn-sm" onclick="logout()">Logout</button>
+                </div>
+            </div>
+        </nav>
+
+        <div class="container-fluid p-0">
+            <div class="row g-0">
+                <!-- Sidebar: Template List -->
+                <div class="col-md-3 sidebar">
+                    <div class="btn-add-template p-2">
+                        <button class="btn btn-success w-100" onclick="showNewTemplateModal()">
+                            <strong>+</strong> Add New Template
+                        </button>
+                    </div>
+
+                    <div class="search-box">
+                        <input type="text" class="form-control form-control-sm" id="searchBox" placeholder="Search templates..." oninput="filterTemplates()">
+                    </div>
+
+                    <div id="templateList"></div>
+                </div>
+
+                <!-- Main Content: Editor + Preview -->
+                <div class="col-md-9">
+                    <div class="row g-0">
+                        <!-- Editor Panel -->
+                        <div class="col-md-6 editor-panel p-4 border-end">
+                            <div id="editorContent">
+                                <div class="text-center text-muted py-5">
+                                    <p>Select a template from the list to edit</p>
+                                    <p class="small">or create a new one</p>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Preview Panel -->
+                        <div class="col-md-6 preview-panel p-4">
+                            <h5 class="mb-3">Preview</h5>
+                            <div id="previewContent" class="preview-content">
+                                <p class="text-muted">Preview will appear here</p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- New Template Modal -->
+    <div class="modal fade" id="newTemplateModal" tabindex="-1">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title">Create New Template</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <form id="newTemplateForm">
+                        <div class="mb-3">
+                            <label for="newTemplateName" class="form-label">Template Name</label>
+                            <input type="text" class="form-control" id="newTemplateName" required
+                                   pattern="[A-Z_]+" placeholder="UPPERCASE_SNAKE_CASE">
+                            <div class="form-text">Must be UPPERCASE_SNAKE_CASE (e.g., NEW_GREETING_TEMPLATE)</div>
+                        </div>
+                        <div class="mb-3">
+                            <label for="newTemplateDesc" class="form-label">Description</label>
+                            <input type="text" class="form-control" id="newTemplateDesc" required>
+                        </div>
+                        <div class="mb-3">
+                            <label for="newTemplateEnglish" class="form-label">English Version</label>
+                            <textarea class="form-control" id="newTemplateEnglish" rows="5" required></textarea>
+                        </div>
+                        <button type="submit" class="btn btn-primary">Create Template</button>
+                    </form>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <script>
+        // ============================================================================
+        // State Management
+        // ============================================================================
+
+        const AppState = {
+            templates: [],
+            currentTemplate: null,
+            editMode: 'view',
+            currentLanguage: 'english'
+        };
+
+        // Sample data for preview placeholders
+        const SAMPLE_DATA = {
+            name: "Ahmed Khan",
+            course_name: "Certified Tax Advisor (CTA)",
+            Pdf_Link: "https://drive.google.com/file/d/example/CTA-Course.pdf",
+            Demo_Link: "https://youtube.com/watch?v=example",
+            fee: "150,000 PKR",
+            duration: "3 months",
+            education: "Bachelors in Commerce",
+            start_date: "January 15, 2025",
+            professor: "Mr. Ahmed Khan, FCA",
+            location: "Gulberg Campus, Lahore",
+            contact: "+92-300-1234567",
+            email: "info@ict.net.pk"
+        };
+
+        // ============================================================================
+        // Utility Functions
+        // ============================================================================
+
+        function showLoading() {
+            document.getElementById('loadingOverlay').style.display = 'flex';
+        }
+
+        function hideLoading() {
+            document.getElementById('loadingOverlay').style.display = 'none';
+        }
+
+        function showToast(message, type = 'success') {
+            const toastHtml = `
+                <div class="toast align-items-center text-white bg-${type === 'success' ? 'success' : 'danger'} border-0" role="alert">
+                    <div class="d-flex">
+                        <div class="toast-body">${message}</div>
+                        <button type="button" class="btn-close btn-close-white me-2 m-auto" data-bs-dismiss="toast"></button>
+                    </div>
+                </div>
+            `;
+            const container = document.querySelector('.toast-container');
+            const div = document.createElement('div');
+            div.innerHTML = toastHtml;
+            const toastElement = div.firstElementChild;
+            container.appendChild(toastElement);
+            const toast = new bootstrap.Toast(toastElement, { delay: 3000 });
+            toast.show();
+            toastElement.addEventListener('hidden.bs.toast', () => toastElement.remove());
+        }
+
+        // ============================================================================
+        // API Functions
+        // ============================================================================
+
+        async function apiCall(url, options = {}) {
+            try {
+                const response = await fetch(url, {
+                    ...options,
+                    credentials: 'include',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        ...options.headers
+                    }
+                });
+
+                if (response.status === 401) {
+                    showToast('Session expired. Please login again.', 'error');
+                    showLogin();
+                    return null;
+                }
+
+                if (!response.ok) {
+                    const error = await response.json();
+                    throw new Error(error.detail || 'Request failed');
+                }
+
+                return await response.json();
+            } catch (e) {
+                showToast(e.message || 'Network error', 'error');
+                return null;
+            }
+        }
+
+        async function login(username, password) {
+            showLoading();
+            const data = await apiCall('/admin/login', {
+                method: 'POST',
+                body: JSON.stringify({ username, password })
+            });
+            hideLoading();
+
+            if (data && data.success) {
+                showApp();
+                await loadTemplates();
+            }
+        }
+
+        async function logout() {
+            showLoading();
+            await apiCall('/admin/logout', { method: 'POST' });
+            hideLoading();
+            showLogin();
+        }
+
+        async function loadTemplates() {
+            showLoading();
+            const data = await apiCall('/admin/templates');
+            hideLoading();
+
+            if (data) {
+                AppState.templates = data.templates;
+                renderTemplateList();
+                document.getElementById('templateCount').textContent = `${data.total} template${data.total !== 1 ? 's' : ''}`;
+            }
+        }
+
+        async function loadTemplate(name) {
+            showLoading();
+            const data = await apiCall(`/admin/templates/${encodeURIComponent(name)}`);
+            hideLoading();
+
+            if (data) {
+                AppState.currentTemplate = data;
+                renderEditor();
+                renderPreview();
+            }
+        }
+
+        async function saveTemplate() {
+            if (!AppState.currentTemplate) return;
+
+            const name = AppState.currentTemplate.name;
+            const formData = getFormData();
+
+            showLoading();
+            const data = await apiCall(`/admin/templates/${encodeURIComponent(name)}`, {
+                method: 'PUT',
+                body: JSON.stringify(formData)
+            });
+            hideLoading();
+
+            if (data && data.success) {
+                showToast('Template updated successfully!');
+                AppState.currentTemplate = { ...AppState.currentTemplate, ...formData };
+                await loadTemplates();
+                renderEditor();
+                renderPreview();
+            }
+        }
+
+        async function createTemplate(name, description, english) {
+            showLoading();
+            const data = await apiCall('/admin/templates', {
+                method: 'POST',
+                body: JSON.stringify({ name, description, english })
+            });
+            hideLoading();
+
+            if (data && data.success) {
+                showToast('Template created successfully!');
+                await loadTemplates();
+                const modal = bootstrap.Modal.getInstance(document.getElementById('newTemplateModal'));
+                modal.hide();
+                // Select the newly created template
+                loadTemplate(name);
+            }
+        }
+
+        async function deleteTemplate(name) {
+            if (!confirm(`Are you sure you want to delete template "${name}"?\n\nThis action cannot be undone.`)) {
+                return;
+            }
+
+            showLoading();
+            const data = await apiCall(`/admin/templates/${encodeURIComponent(name)}`, {
+                method: 'DELETE'
+            });
+            hideLoading();
+
+            if (data && data.success) {
+                showToast('Template deleted successfully!');
+                AppState.currentTemplate = null;
+                await loadTemplates();
+                document.getElementById('editorContent').innerHTML = '<div class="text-center text-muted py-5"><p>Template deleted</p></div>';
+            }
+        }
+
+        // ============================================================================
+        // UI Rendering Functions
+        // ============================================================================
+
+        function showLogin() {
+            document.getElementById('loginScreen').style.display = 'flex';
+            document.getElementById('app').style.display = 'none';
+        }
+
+        function showApp() {
+            document.getElementById('loginScreen').style.display = 'none';
+            document.getElementById('app').style.display = 'block';
+        }
+
+        function renderTemplateList() {
+            const container = document.getElementById('templateList');
+            const searchTerm = document.getElementById('searchBox').value.toLowerCase();
+
+            const filtered = AppState.templates.filter(t =>
+                t.name.toLowerCase().includes(searchTerm) ||
+                t.description.toLowerCase().includes(searchTerm)
+            );
+
+            container.innerHTML = filtered.map(template => `
+                <div class="template-item ${AppState.currentTemplate && AppState.currentTemplate.name === template.name ? 'active' : ''}"
+                     onclick="loadTemplate('${template.name}')">
+                    <div class="template-name">${template.name}</div>
+                    <div class="template-desc">${template.description}</div>
+                    <div class="mt-1">
+                        ${template.languages.map(lang =>
+                            `<span class="badge badge-language ${AppState.currentTemplate && AppState.currentTemplate.name === template.name ? 'bg-light text-primary' : 'bg-secondary'}">${lang}</span>`
+                        ).join('')}
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        function filterTemplates() {
+            renderTemplateList();
+        }
+
+        function renderEditor() {
+            if (!AppState.currentTemplate) return;
+
+            const template = AppState.currentTemplate;
+            const languages = Object.keys(template).filter(k => k !== 'name' && k !== 'description');
+
+            const languageTabs = languages.map(lang => `
+                <button class="btn btn-sm ${lang === AppState.currentLanguage ? 'btn-primary' : 'btn-outline-primary'}"
+                        onclick="switchLanguage('${lang}')">${lang}</button>
+            `).join('');
+
+            const currentContent = template[AppState.currentLanguage] || '';
+
+            document.getElementById('editorContent').innerHTML = `
+                <div class="d-flex justify-content-between align-items-center mb-3">
+                    <h5 class="mb-0">${template.name}</h5>
+                    <button class="btn btn-sm btn-danger" onclick="deleteTemplate('${template.name}')">Delete</button>
+                </div>
+
+                <div class="mb-3">
+                    <label class="form-label fw-bold">Description</label>
+                    <input type="text" class="form-control" id="descriptionInput" value="${template.description}">
+                </div>
+
+                <div class="mb-3">
+                    <label class="form-label fw-bold">Language Versions</label>
+                    <div class="btn-group d-flex mb-2" role="group">
+                        ${languageTabs}
+                        <button class="btn btn-sm btn-outline-success" onclick="addLanguageVersion()">+ Add Language</button>
+                    </div>
+                </div>
+
+                <div class="mb-3">
+                    <label class="form-label fw-bold">${AppState.currentLanguage} Version</label>
+                    <textarea class="form-control" id="contentTextarea" rows="15" oninput="renderPreview()">${currentContent}</textarea>
+                    <div class="form-text">
+                        Use placeholders: {name}, {course_name}, {Pdf_Link}, {Demo_Link}, {fee}, {duration}, etc.
+                    </div>
+                </div>
+
+                <div class="d-flex gap-2">
+                    <button class="btn btn-primary" onclick="saveTemplate()">Save Changes</button>
+                    <button class="btn btn-outline-secondary" onclick="loadTemplate('${template.name}')">Cancel</button>
+                </div>
+            `;
+        }
+
+        function switchLanguage(language) {
+            // Save current content before switching
+            const textarea = document.getElementById('contentTextarea');
+            if (textarea && AppState.currentTemplate) {
+                AppState.currentTemplate[AppState.currentLanguage] = textarea.value;
+            }
+
+            AppState.currentLanguage = language;
+            renderEditor();
+            renderPreview();
+        }
+
+        function addLanguageVersion() {
+            const newLang = prompt('Enter language name (e.g., urdu, mixed):');
+            if (!newLang) return;
+
+            const langName = newLang.toLowerCase().trim();
+            if (AppState.currentTemplate[langName]) {
+                alert('This language already exists!');
+                return;
+            }
+
+            AppState.currentTemplate[langName] = '';
+            switchLanguage(langName);
+        }
+
+        function renderPreview() {
+            if (!AppState.currentTemplate) return;
+
+            const textarea = document.getElementById('contentTextarea');
+            let content = textarea ? textarea.value : AppState.currentTemplate[AppState.currentLanguage] || '';
+
+            // Replace placeholders with sample data
+            Object.keys(SAMPLE_DATA).forEach(key => {
+                const regex = new RegExp(`\\{${key}\\}`, 'g');
+                content = content.replace(regex, `<strong>${SAMPLE_DATA[key]}</strong>`);
+            });
+
+            document.getElementById('previewContent').innerHTML = content || '<p class="text-muted">No content</p>';
+        }
+
+        function getFormData() {
+            const description = document.getElementById('descriptionInput').value;
+            const content = document.getElementById('contentTextarea').value;
+
+            const formData = { description };
+            formData[AppState.currentLanguage] = content;
+
+            return formData;
+        }
+
+        function showNewTemplateModal() {
+            const modal = new bootstrap.Modal(document.getElementById('newTemplateModal'));
+            modal.show();
+            document.getElementById('newTemplateForm').reset();
+        }
+
+        // ============================================================================
+        // Event Listeners
+        // ============================================================================
+
+        document.getElementById('loginForm').addEventListener('submit', (e) => {
+            e.preventDefault();
+            const username = document.getElementById('username').value;
+            const password = document.getElementById('password').value;
+            login(username, password);
+        });
+
+        document.getElementById('newTemplateForm').addEventListener('submit', (e) => {
+            e.preventDefault();
+            const name = document.getElementById('newTemplateName').value.toUpperCase();
+            const description = document.getElementById('newTemplateDesc').value;
+            const english = document.getElementById('newTemplateEnglish').value;
+            createTemplate(name, description, english);
+        });
+
+        // ============================================================================
+        // Initialization
+        // ============================================================================
+
+        // Show login screen on load
+        showLogin();
+    </script>
+</body>
+</html>

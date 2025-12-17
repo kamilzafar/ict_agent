@@ -769,6 +769,3 @@ Pakistan Stock Exchange Course details:
 - Status: Open
 - Mode: Online and Physical in Islamabad
 
----
-
-*Last Updated: December 2025 - v3.0 (Template System Enabled)*

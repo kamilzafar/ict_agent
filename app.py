@@ -6,14 +6,16 @@ import sys
 import time
 from contextlib import asynccontextmanager
 from typing import Optional, List, Dict, Any
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
+import secrets
 
 
-from fastapi import FastAPI, HTTPException, status, Request, Header, Depends, Security
+from fastapi import FastAPI, HTTPException, status, Request, Header, Depends, Security, Cookie, Response
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, HTMLResponse
 from fastapi.security import APIKeyHeader
+from fastapi.staticfiles import StaticFiles
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 from pydantic import BaseModel, Field, field_validator
 from dotenv import load_dotenv
@@ -218,7 +220,19 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.error(f"Error initializing agent: {e}", exc_info=True)
         raise RuntimeError(f"Failed to initialize agent: {str(e)}") from e
-    
+
+    # Initialize template manager for admin interface
+    try:
+        from core.template_manager import TemplateManager
+        global template_manager
+        templates_path = os.path.join(os.path.dirname(__file__), "config", "templates.json")
+        template_manager = TemplateManager(templates_path)
+        logger.info("Template manager initialized successfully")
+    except Exception as e:
+        logger.error(f"Error initializing template manager: {e}", exc_info=True)
+        logger.warning("Admin template editor may not work correctly")
+        template_manager = None
+
     yield
     
     # Shutdown: Cleanup
@@ -231,7 +245,51 @@ async def lifespan(app: FastAPI):
     logger.info("Shutting down...")
 
 
+# ============================================================================
+# Admin Session Management
+# ============================================================================
+
+# In-memory session storage
+# For production with multiple workers, consider using Redis
+admin_sessions: Dict[str, datetime] = {}  # session_id -> expiry_time
+ADMIN_SESSION_TIMEOUT = int(os.getenv("ADMIN_SESSION_TIMEOUT", "3600"))  # 1 hour default
+
+
+def create_session() -> str:
+    """Create new admin session with timeout."""
+    session_id = secrets.token_urlsafe(32)
+    admin_sessions[session_id] = datetime.now() + timedelta(seconds=ADMIN_SESSION_TIMEOUT)
+    return session_id
+
+
+def validate_session(session_id: str) -> bool:
+    """Validate admin session and extend if valid."""
+    if session_id not in admin_sessions:
+        return False
+
+    if datetime.now() > admin_sessions[session_id]:
+        # Session expired - remove it
+        del admin_sessions[session_id]
+        return False
+
+    # Valid session - extend the expiry (sliding expiration)
+    admin_sessions[session_id] = datetime.now() + timedelta(seconds=ADMIN_SESSION_TIMEOUT)
+    return True
+
+
+def verify_admin_session(admin_session: Optional[str] = Cookie(None)):
+    """Dependency for admin endpoints - validates session cookie."""
+    if not admin_session or not validate_session(admin_session):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid or expired session. Please login again."
+        )
+    return admin_session
+
+
+# ============================================================================
 # Create FastAPI app
+# ============================================================================
 # root_path is used when behind a proxy (e.g., nginx) with subpath
 root_path = os.getenv("ROOT_PATH", "")
 app = FastAPI(
@@ -263,6 +321,37 @@ app.add_middleware(
     allow_headers=["*"],
     expose_headers=["*"],
 )
+
+# Mount static files for admin UI
+static_dir = os.path.join(os.path.dirname(__file__), "static")
+os.makedirs(static_dir, exist_ok=True)
+try:
+    app.mount("/static", StaticFiles(directory=static_dir), name="static")
+    logger.info(f"Static files mounted from: {static_dir}")
+except Exception as e:
+    logger.warning(f"Failed to mount static files: {e}")
+
+
+# Serve admin UI HTML
+@app.get("/admin", response_class=HTMLResponse, tags=["Admin"])
+async def serve_admin_ui():
+    """Serve the admin template editor interface."""
+    admin_html_path = os.path.join(static_dir, "admin.html")
+    if not os.path.exists(admin_html_path):
+        return HTMLResponse(
+            content="<h1>Admin UI Not Found</h1><p>Please create static/admin.html file.</p>",
+            status_code=404
+        )
+    try:
+        with open(admin_html_path, 'r', encoding='utf-8') as f:
+            return HTMLResponse(content=f.read())
+    except Exception as e:
+        logger.error(f"Error serving admin UI: {e}")
+        return HTMLResponse(
+            content=f"<h1>Error</h1><p>Failed to load admin UI: {e}</p>",
+            status_code=500
+        )
+
 
 # Global exception handler
 @app.exception_handler(Exception)
@@ -332,6 +421,34 @@ class HealthResponse(BaseModel):
     sheets_cache_initialized: bool = False
     redis_connected: bool = False
     version: str = "1.0.0"
+
+
+# Admin Template Editor Models
+class LoginRequest(BaseModel):
+    """Request model for admin login."""
+    username: str = Field(..., min_length=1, max_length=100)
+    password: str = Field(..., min_length=1, max_length=100)
+
+
+class TemplateUpdateRequest(BaseModel):
+    """Request model for updating a template."""
+    description: Optional[str] = None
+    model_config = {"extra": "allow"}  # Allow dynamic language fields
+
+
+class TemplateCreateRequest(BaseModel):
+    """Request model for creating a new template."""
+    name: str = Field(..., pattern="^[A-Z_]+$", description="Template name in UPPERCASE_SNAKE_CASE")
+    description: str = Field(..., min_length=1, description="Template description")
+    model_config = {"extra": "allow"}  # Allow dynamic language fields
+
+    @field_validator("name")
+    @classmethod
+    def validate_name(cls, v: str) -> str:
+        """Validate template name is uppercase."""
+        if not v.isupper():
+            raise ValueError("Template name must be UPPERCASE_SNAKE_CASE")
+        return v
 
 
 # Routes
@@ -902,6 +1019,304 @@ async def google_sheets_webhook(
             "message": str(e),
             "sheet": payload.sheet_name
         }
+
+
+# ============================================================================
+# ADMIN ENDPOINTS - Template Editor
+# ============================================================================
+
+@app.post("/admin/login", tags=["Admin"])
+async def admin_login(request: LoginRequest, response: Response):
+    """
+    Admin login endpoint for template editor.
+
+    Validates credentials and creates a session cookie.
+    """
+    username = os.getenv("ADMIN_USERNAME", "ictxzensbot")
+    password = os.getenv("ADMIN_PASSWORD", "ictxzensbot")
+
+    if request.username != username or request.password != password:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid credentials"
+        )
+
+    # Create session
+    session_id = create_session()
+
+    # Set secure cookie
+    response.set_cookie(
+        key="admin_session",
+        value=session_id,
+        httponly=True,
+        samesite="strict",
+        max_age=ADMIN_SESSION_TIMEOUT
+    )
+
+    logger.info(f"Admin login successful: {username}")
+
+    return {"success": True, "message": "Logged in successfully"}
+
+
+@app.get("/admin/templates", tags=["Admin"])
+async def list_templates(session: str = Depends(verify_admin_session)):
+    """
+    List all available templates.
+
+    Returns template names, descriptions, and available languages.
+    """
+    try:
+        if template_manager is None:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Template manager not initialized"
+            )
+
+        templates = template_manager.get_all_templates()
+
+        result = []
+        for name, data in templates.items():
+            result.append({
+                "name": name,
+                "description": data.get("description", "No description"),
+                "languages": [k for k in data.keys() if k != "description"]
+            })
+
+        return {"templates": result, "total": len(result)}
+
+    except Exception as e:
+        logger.error(f"Error listing templates: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to list templates: {str(e)}"
+        )
+
+
+@app.get("/admin/templates/{name}", tags=["Admin"])
+async def get_template(name: str, session: str = Depends(verify_admin_session)):
+    """
+    Get a single template by name.
+
+    Returns all language versions and metadata for the template.
+    """
+    try:
+        if template_manager is None:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Template manager not initialized"
+            )
+
+        template = template_manager.get_template(name)
+
+        if not template:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Template '{name}' not found"
+            )
+
+        return {"name": name, **template}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error getting template {name}: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to get template: {str(e)}"
+        )
+
+
+@app.put("/admin/templates/{name}", tags=["Admin"])
+async def update_template(
+    name: str,
+    data: TemplateUpdateRequest,
+    session: str = Depends(verify_admin_session)
+):
+    """
+    Update an existing template.
+
+    Supports partial updates - only provided fields will be updated.
+    Changes take effect immediately via hot-reload.
+    """
+    try:
+        if template_manager is None:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Template manager not initialized"
+            )
+
+        # Get update data (exclude unset fields)
+        update_data = data.model_dump(exclude_unset=True)
+
+        if not update_data:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="No update data provided"
+            )
+
+        # Update template
+        template_manager.update_template(name, update_data)
+
+        logger.info(f"Template updated by admin: {name}")
+
+        return {
+            "success": True,
+            "message": f"Template '{name}' updated successfully",
+            "reloaded": True
+        }
+
+    except ValueError as e:
+        # Template not found
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(e)
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error updating template {name}: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Update failed: {str(e)}"
+        )
+
+
+@app.post("/admin/templates", tags=["Admin"], status_code=status.HTTP_201_CREATED)
+async def create_template(
+    data: TemplateCreateRequest,
+    session: str = Depends(verify_admin_session)
+):
+    """
+    Create a new template.
+
+    Template name must be UPPERCASE_SNAKE_CASE and unique.
+    Requires at least a description and one language version.
+    """
+    try:
+        if template_manager is None:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Template manager not initialized"
+            )
+
+        # Validate template name format
+        if not template_manager.validate_template_name(data.name):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Template name must be UPPERCASE_SNAKE_CASE (e.g., NEW_TEMPLATE_NAME)"
+            )
+
+        # Extract template data (exclude name field)
+        template_data = data.model_dump(exclude={"name"})
+
+        # Create template
+        template_manager.create_template(data.name, template_data)
+
+        logger.info(f"New template created by admin: {data.name}")
+
+        return {
+            "success": True,
+            "message": f"Template '{data.name}' created successfully",
+            "reloaded": True
+        }
+
+    except ValueError as e:
+        # Template already exists or validation error
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=str(e)
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error creating template: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Creation failed: {str(e)}"
+        )
+
+
+@app.delete("/admin/templates/{name}", tags=["Admin"])
+async def delete_template(name: str, session: str = Depends(verify_admin_session)):
+    """
+    Delete a template.
+
+    WARNING: This action cannot be undone. A backup is created automatically.
+    """
+    try:
+        if template_manager is None:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Template manager not initialized"
+            )
+
+        # Delete template
+        template_manager.delete_template(name)
+
+        logger.info(f"Template deleted by admin: {name}")
+
+        return {
+            "success": True,
+            "message": f"Template '{name}' deleted successfully",
+            "reloaded": True
+        }
+
+    except ValueError as e:
+        # Template not found
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(e)
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error deleting template {name}: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Deletion failed: {str(e)}"
+        )
+
+
+@app.post("/admin/templates/reload", tags=["Admin"])
+async def reload_templates_endpoint(session: str = Depends(verify_admin_session)):
+    """
+    Force reload all templates from disk.
+
+    Useful if templates.json was modified externally.
+    """
+    try:
+        from tools.template_tools import reload_templates
+
+        templates = reload_templates()
+
+        logger.info("Templates manually reloaded by admin")
+
+        return {
+            "success": True,
+            "message": "Templates reloaded successfully",
+            "count": len(templates)
+        }
+
+    except Exception as e:
+        logger.error(f"Error reloading templates: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Reload failed: {str(e)}"
+        )
+
+
+@app.post("/admin/logout", tags=["Admin"])
+async def admin_logout(response: Response, admin_session: Optional[str] = Cookie(None)):
+    """
+    Logout admin user and clear session.
+    """
+    if admin_session and admin_session in admin_sessions:
+        del admin_sessions[admin_session]
+
+    # Clear cookie
+    response.delete_cookie("admin_session")
+
+    return {"success": True, "message": "Logged out successfully"}
 
 
 if __name__ == "__main__":

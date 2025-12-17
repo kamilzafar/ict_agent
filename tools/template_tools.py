@@ -7,6 +7,7 @@ instead of having all templates loaded in the system prompt.
 
 import json
 import os
+import threading
 from typing import Optional
 from langchain_core.tools import tool
 
@@ -17,6 +18,9 @@ TEMPLATES_PATH = os.path.join(
     "config",
     "templates.json"
 )
+
+# Thread lock for safe hot-reload
+_templates_lock = threading.Lock()
 
 def _load_templates() -> dict:
     """Load templates from JSON file."""
@@ -32,6 +36,28 @@ def _load_templates() -> dict:
 
 
 TEMPLATES = _load_templates()
+
+
+def reload_templates() -> dict:
+    """
+    Thread-safe reload of templates from disk.
+    Called after templates.json is updated by the admin interface.
+
+    Returns:
+        dict: The reloaded templates dictionary
+
+    Raises:
+        ValueError: If templates file is corrupted or empty
+    """
+    with _templates_lock:
+        new_templates = _load_templates()
+        if not new_templates:
+            raise ValueError("Failed to load templates - file may be corrupted or empty")
+
+        # Atomic update - replace entire dict at once
+        global TEMPLATES
+        TEMPLATES = new_templates
+        return TEMPLATES
 
 
 @tool

@@ -10,6 +10,8 @@ services:
     volumes:
       - ./memory_db:/app/memory_db
       - ./sheets_index_db:/app/sheets_index_db
+      - ./config:/app/config              # Mount config for hot-reload
+      - ./static:/app/static:ro           # Mount static files for admin UI
       # Optional: Mount credentials if using service account
       # - ./credentials:/app/credentials:ro
     restart: unless-stopped
