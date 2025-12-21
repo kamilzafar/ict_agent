@@ -32,6 +32,7 @@ memory_db/
 Thumbs.db
 
 # Generated workflow files
+workflow.png
 workflow.mmd
 
 # Jupyter notebooks

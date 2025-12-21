@@ -1,7 +1,5 @@
 # Intelligent Chat Agent with Long-Term Memory
 
-![LangGraph Workflow](workflow.png)
-
 A production-ready intelligent chat agent API built with LangGraph and FastAPI that features:
 - **Long-term memory** using ChromaDB vector store
 - **Google Sheets integration** for real-time course data, links, FAQs, and company information
