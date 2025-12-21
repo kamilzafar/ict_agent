@@ -56,3 +56,10 @@ sheets_index_db/
 token.pickle
 
 logs/
+
+/docs
+
+# Markdown files
+*.md
+test_stages.bat
+test_stages.py
