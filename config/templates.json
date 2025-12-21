@@ -6,8 +6,8 @@
   },
   "GREETING_RETURNING_LEAD": {
     "description": "Greeting for returning leads with context",
-    "english": "Aoa {name}!\n\nGood to hear from you again.\n\nLast time we discussed {course_name}. How can I help you?",
-    "urdu": "Aoa {name}!\n\nAp se dobara baat kar ke khushi hui.\n\nPichli dafa hum ne {course_name} ke bare mein baat ki thi. Kaise madad kar sakta hun?"
+    "english": "Aoa!\n\nGood to hear from you again.\n\nLast time we discussed {course_name}. How can I help you?",
+    "urdu": "Aoa!\n\nAp se dobara baat kar ke khushi hui.\n\nPichli dafa hum ne {course_name} ke bare mein baat ki thi. Kaise madad kar sakta hun?"
   },
   "COURSE_SELECTION": {
     "description": "Show all 12 courses and ask for selection",
