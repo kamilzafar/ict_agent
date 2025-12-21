@@ -1,231 +1,112 @@
 {
-  "GREETING_NEW_LEAD": {
-    "description": "First greeting for new leads to collect name",
-    "english": "Aoa!\nI am Tanveer Awan from ICT.\n\nMay I know your name?",
-    "urdu": "Aoa!\nMain Tanveer Awan hun ICT se.\n\nAp ka naam kya hai?"
+  "GREETING_SALAM": {
+    "description": "User greets with Salam / Aoa / Assalam o Alaikum",
+    "urdu": "Wa Alaikum Salam!\n\nMain Muhammad Abid hun, ICT se.\n\nAp ka naam kya hai?"
   },
+
+  "GREETING_ENGLISH": {
+    "description": "User greets with Hi / Hello / Hey",
+    "english": "Hello!\n\nI am Muhammad Abid from ICT.\n\nMay I know your name?"
+  },
+
+  "GREETING_GENERIC_FALLBACK": {
+    "description": "Unclear greeting",
+    "english": "Hello!\n\nI am Muhammad Abid from ICT.\n\nHow can I help you today?"
+  },
+
   "GREETING_RETURNING_LEAD": {
-    "description": "Greeting for returning leads with context",
-    "english": "Aoa {name}!\n\nGood to hear from you again.\n\nLast time we discussed {course_name}. How can I help you?",
-    "urdu": "Aoa {name}!\n\nAp se dobara baat kar ke khushi hui.\n\nPichli dafa hum ne {course_name} ke bare mein baat ki thi. Kaise madad kar sakta hun?"
+    "description": "Returning lead greeting",
+    "english": "Hello {name}!\n\nGood to hear from you again.\n\nHow can I help you?",
+    "urdu": "Salam {name}!\n\nDobara baat kar ke khushi hui.\n\nKaise madad kar sakta hun?"
   },
+
   "COURSE_SELECTION": {
-    "description": "Show all 12 courses and ask for selection",
-    "mixed": "Dear {name},\n\nPlease save my number as \"ICT Tanveer\" for future use.\n\nWhich course interests you?\n\n**ICT Courses:**\n1- Certified Tax Advisor (CTA)\n2- Advance Taxation & Litigations\n3- USA Taxation Course\n4- UAE Taxation Course\n5- UK Taxation Course\n6- Saudi Taxation Course\n7- Company Secretary Course\n8- Sales Tax Mastery Course\n9- Import & Export Course\n10- LLC Formation Course\n11- Canadian Taxation Course\n12- Pakistan Stock Exchange Course\n\nAp number ya name bata sakte hain."
+    "description": "Show all courses",
+    "mixed": "{name}, please save my number as \"ICT Abid\".\n\nWhich course are you interested in?\n\n1- Certified Tax Advisor (CTA)\n2- Advanced Taxation & Litigation\n3- USA Taxation Course\n4- UAE Taxation Course\n5- UK Taxation Course\n6- Saudi Taxation Course\n7- Company Secretary Course\n8- Sales Tax Mastery Course\n9- Import & Export Course\n10- LLC Formation Course\n11- Canadian Taxation Course\n12- Pakistan Stock Exchange Course\n\nCourse number ya name bata dein."
   },
+
   "EDUCATION_INQUIRY": {
-    "description": "Ask about education background",
-    "english": "Good choice!\n\nWhat is your education background?\n\n1- Matric/Intermediate\n2- OLevel/Alevel\n3- Bachelors\n4- Masters\n5- Professional (CA/ACCA/etc)\n6- Other",
-    "urdu": "Bohat acha!\n\nAp ki education kya hai?\n\n1- Matric/Intermediate\n2- OLevel/Alevel\n3- Bachelors\n4- Masters\n5- Professional (CA/ACCA/etc)\n6- Other"
+    "description": "Ask education background",
+    "urdu": "Bohat acha!\n\nAp ki education kya hai?\n\n1- Matric / Intermediate\n2- O Levels / A Levels\n3- Bachelors\n4- Masters\n5- Professional (CA / ACCA etc)\n6- Other"
   },
+
   "GOAL_INQUIRY": {
-    "description": "Ask why they want to do the course",
-    "english": "Perfect!\n\nWhat is your goal? Why do you want to do this course?",
-    "urdu": "Bohat acha!\n\nAp ka goal kya hai? Ye course kyun karna chahte hain?"
+    "description": "Ask goal",
+    "urdu": "Samajh gaya.\n\nAp is course se kya achieve karna chahte hain?"
   },
+
   "VALIDATION_WITH_PDF": {
-    "description": "Validate choice and share PDF link (MUST fetch Pdf_Link from Course_Links first)",
-    "english": "{name}, with your {education} background and goal to {their_goal}, {course_name} is a great fit!\n\nCourse details:\n{Pdf_Link}\n\nWant to watch a demo class?",
-    "urdu": "{name}, ap ki {education} background aur {their_goal} ke goal ke sath, {course_name} ap ke liye perfect hai!\n\nCourse details:\n{Pdf_Link}\n\nDemo class dekhna chahein ge?"
+    "description": "Validate and share PDF",
+    "urdu": "{name}, ap ki education aur goal ke liye {course_name} bilkul suitable hai.\n\nCourse details PDF:\n{Pdf_Link}\n\nAgar chahein to demo class bhi dekh sakte hain."
   },
+
   "DEMO_VIDEO_SHARE": {
-    "description": "Share demo video link (MUST fetch Demo_Link from Course_Links first)",
-    "english": "Here is the demo class:\n{Demo_Link}\n\nLet me know if you have any questions!",
-    "urdu": "Ye raha demo class ka video:\n{Demo_Link}\n\nKoi sawal ho toh batayein!"
+    "description": "Share demo video",
+    "urdu": "Ye rahi demo class:\n{Demo_Link}\n\nDekh kar batayein kaisi lagi."
   },
-  "FEE_INQUIRY": {
-    "description": "Share fee details (MUST fetch from Course_Details first) - Only when explicitly asked",
-    "english": "{course_name} fee:\n\nFee: {Course_Fee} PKR\nDuration: {Course_Duration}\nNext batch: {Course_Start_Date}\n\nWant to know how to enroll?",
-    "urdu": "{course_name} ki fee:\n\nFee: {Course_Fee} PKR\nDuration: {Course_Duration}\nNext batch: {Course_Start_Date}\n\nEnrollment ka tareeqa janana chahein ge?"
-  },
-  "BATCH_DETAILS": {
-    "description": "Share batch timing details (MUST fetch from Course_Details first)",
-    "english": "{course_name} next batch:\n\nStart: {Course_Start_Date}\nStatus: {Enrollment_Status}\n\nInterested in joining?",
-    "urdu": "{course_name} ka next batch:\n\nStart: {Course_Start_Date}\nStatus: {Enrollment_Status}\n\nInterested hain?"
-  },
-  "TRAINER_INFO": {
-    "description": "Share trainer information (MUST fetch from About_Profr first)",
-    "english": "{course_name} trainer:\n\n{Display_Name}\n{Qualifications}\n{Total_Years_Experience} years experience\n\n{Short_Bio}",
-    "urdu": "{course_name} ke trainer:\n\n{Display_Name}\n{Qualifications}\n{Total_Years_Experience} saal ka tajurba\n\n{Short_Bio}"
-  },
-  "PAYMENT_DETAILS": {
-    "description": "Share payment details ONLY when user explicitly asks how to pay/enroll",
-    "english": "{name}, here are the details:\n\nCourse: {course_name}\nProfessor: {Professor_Name}\nDuration: {Course_Duration}\nFee: {Course_Fee} PKR\n\n**Bank Details:**\nBank: Bank Alfalah\nAccount Title: INSTITUTE OF CORPORATE AND TAXATION\nAccount No: 55045001664766\nIBAN: PK91ALFH5504005001664766\nBranch: IBG Blue Area Branch Islamabad\n\nPlease share payment screenshot after transfer.",
-    "urdu": "{name}, yeh rahi details:\n\nCourse: {course_name}\nProfessor: {Professor_Name}\nDuration: {Course_Duration}\nFee: {Course_Fee} PKR\n\n**Bank Details:**\nBank: Bank Alfalah\nAccount Title: INSTITUTE OF CORPORATE AND TAXATION\nAccount No: 55045001664766\nIBAN: PK91ALFH5504005001664766\nBranch: IBG Blue Area Branch Islamabad\n\nPayment ke baad screenshot share kar dijiye."
-  },
-  "PAYMENT_SCREENSHOT_RECEIVED": {
-    "description": "Confirm payment screenshot received",
-    "english": "Thank you {name}!\n\nScreenshot received. Our team will verify and send confirmation shortly.\n\nWelcome to ICT!",
-    "urdu": "Shukriya {name}!\n\nScreenshot mil gaya. Team verify karke jald confirmation bhej degi.\n\nICT mein khush aamdeed!"
-  },
-  "DATA_NOT_FOUND": {
-    "description": "When data is not available (NEVER mention technical details like sheets/database)",
-    "english": "I don't have that information right now. Let me check and get back to you shortly!",
-    "urdu": "Ye information mere paas abhi nahi hai. Main check karke ap ko jald batata hun!"
-  },
-  "POLICY_NOT_FOUND": {
-    "description": "When policy information needs admission team confirmation",
-    "english": "I need to confirm this with the admission team. Will get back to you soon!",
-    "urdu": "Ye mujhe admission team se confirm karna hoga. Jald batata hun!"
-  },
-  "STUDENT_FEEDBACK": {
-    "description": "Share student feedback link (MUST fetch from Company_Info first)",
-    "english": "Here are our students' reviews:\n\n{student_feedback_link}",
-    "urdu": "Yeh hain students ke reviews:\n\n{student_feedback_link}"
-  },
-  "PLATFORM_INFO": {
-    "description": "Explain online class platform",
-    "english": "We use Zoom for online classes (not Google Meet).\n\nLive sessions + recorded lectures on student portal.",
-    "urdu": "Hum Zoom use karte hain online classes ke liye.\n\nLive sessions + recorded lectures portal pe available hain."
-  },
-  "NO_TIME_RESPONSE": {
-    "description": "When lead says they don't have time",
-    "english": "No problem!\n\nPortal pe recorded lectures hain. Ap apne time pe dekh sakte hain.\n\nPlus mentorship support milti hai.\n\nDetails share karun?",
-    "urdu": "Koi masla nahi!\n\nPortal pe recorded lectures hain. Apne time pe dekh sakte hain.\n\nMentorship bhi milti hai.\n\nDetails share karun?"
-  },
-  "DISCOUNT_REQUEST": {
-    "description": "When lead asks for discount",
-    "english": "Currently this offer is not available, but I will inform the admission team about your request.",
-    "urdu": "Abhi ye offer available nahi hai, lekin main ap ki request admission team tak pohanchata hun."
-  },
-  "REFUND_POLICY": {
-    "description": "Direct to finance team for refund policy",
-    "english": "For refund policy, please contact finance team:\n+92 334 3926 1195",
-    "urdu": "Refund policy ke liye finance team se contact karein:\n+92 334 3926 1195"
-  },
-  "NON_ICT_TOPIC": {
-    "description": "When user asks about non-ICT topics",
-    "english": "Sorry, I can only help with ICT courses. Is there any course you want to know about?",
-    "urdu": "Sorry, main sirf ICT courses mein madad kar sakta hun. Koi course hai jis ke bare mein janana chahte hain?"
-  },
-  "RESET_REQUEST": {
-    "description": "When unclear reset request is made",
-    "english": "I'm not sure what you mean. Do you want me to start from the beginning? Please let me know!",
-    "urdu": "Mujhe samajh nahi aaya. Kya shuru se baat karun? Batayein!"
-  },
-  "RESET_CONFIRMED": {
-    "description": "When user confirms they want to restart",
-    "english": "I am Tanveer from ICT and I am here to help you with our courses. Can I know your name?",
-    "urdu": "Main Tanveer hun ICT se, courses ke bare mein madad ke liye. Ap ka naam kya hai?"
-  },
-  "AI_ACCUSATION": {
-    "description": "When user accuses of being AI (use after multiple attempts)",
-    "english": "Sir/Ma'am, I am a human, not an AI. How can I help you with our courses?",
-    "urdu": "Sir/Ma'am, main insaan hun, AI nahi. Courses mein kaise madad kar sakta hun?"
-  },
-  "AI_ACCUSATION_FINAL": {
-    "description": "Final response when user persists with AI accusation",
-    "english": "I have clarified multiple times that I am human. Please let me know how I can assist you with our courses.",
-    "urdu": "Main kai baar clarify kar chuka hun ke main insaan hun. Courses mein kaise madad karun?"
-  },
-  "MULTIPLE_COURSE_PRICING": {
-    "description": "When user asks pricing for multiple courses without selecting",
-    "english": "Please select a course first, then I will share complete details.\n\nWhich course interests you?",
-    "urdu": "Pehle course select kar lein, phir complete details share karunga.\n\nKaunsa course pasand hai?"
-  },
-  "ENROLLMENT_LINK_REQUEST": {
-    "description": "When user asks for enrollment link",
-    "english": "For enrollment, visit our onboarding page:\nict.net.pk/onboarding\n\nPayment portal and form available there. Need help? Let me know!",
-    "urdu": "Enrollment ke liye onboarding page visit karein:\nict.net.pk/onboarding\n\nWahan payment portal aur form mil jayega. Madad chahiye toh batayein!"
-  },
-  "COURSE_LOCATIONS": {
-    "description": "Share course location availability (MUST fetch from Course_Details first)",
-    "english": "{course_name} availability:\n\nOnline: {Online_Available}\nPhysical: {Physical_Available}\n\nLocations: {List_cities}",
-    "urdu": "{course_name} ki availability:\n\nOnline: {Online_Available}\nPhysical: {Physical_Available}\n\nLocations: {List_cities}"
-  },
-  "WHAT_IS_INCLUDED": {
-    "description": "Explain what's included with every course",
-    "english": "Every course includes:\n\nRecorded lectures on portal\n24/7 WhatsApp support\n1 year mentorship\nCertificate on completion\nJob placement support\nAlumni network access",
-    "urdu": "Har course mein milta hai:\n\nPortal pe recorded lectures\n24/7 WhatsApp support\n1 saal mentorship\nCertificate\nJob placement support\nAlumni network"
-  },
-  "CAMPUS_ADDRESSES": {
-    "description": "Share campus addresses",
-    "english": "Our campuses:\n\n**Islamabad:** Plot 63, Service Road, I-10/3 North\n\n**Karachi:** Office 504, Caesars Tower, Shahrah-e-Faisal\n\n**Lahore:** F/3 Sea Breeze Homes, New Garden Town",
-    "urdu": "Humare campuses:\n\n**Islamabad:** Plot 63, Service Road, I-10/3 North\n\n**Karachi:** Office 504, Caesars Tower, Shahrah-e-Faisal\n\n**Lahore:** F/3 Sea Breeze Homes, New Garden Town"
-  },
-  "FOLLOW_UP_WARM_LEAD": {
-    "description": "Follow up after demo video sent",
-    "english": "{name}, you watched the demo. What did you think?\n\nAny questions before enrolling?",
-    "urdu": "{name}, demo dekh li. Kaisi lagi?\n\nEnrollment se pehle koi sawal?"
-  },
-  "GENTLE_ENROLLMENT_SUGGESTION": {
-    "description": "Gentle suggestion when lead seems ready (use only when lead is warm)",
-    "english": "{name}, {course_name} seems right for you.\n\nWant to know the enrollment process?",
-    "urdu": "{name}, lagta hai {course_name} ap ke liye perfect hai.\n\nEnrollment process janana chahein ge?"
-  },
-  "LEGAL_INQUIRY_REDIRECT": {
-    "description": "Redirect legal service inquiries (DO NOT sell courses, just redirect)",
-    "english": "For legal services, please contact:\n+92 333 0102044",
-    "urdu": "Legal services ke liye yahan contact karein:\n+92 333 0102044"
-  },
-  "HR_JOB_REDIRECT": {
-    "description": "Redirect HR/job/hiring inquiries (DO NOT sell courses, just redirect)",
-    "english": "For job opportunities at ICT, please contact:\n+92 333 0102040",
-    "urdu": "ICT mein job ke liye yahan contact karein:\n+92 333 0102040"
-  },
-  "IT_COURSES_REDIRECT": {
-    "description": "Redirect IT/IDT course inquiries (DO NOT sell courses, just redirect)",
-    "english": "For IT courses, please contact IDT:\n+92 334 3975195",
-    "urdu": "IT courses ke liye IDT se contact karein:\n+92 334 3975195"
-  },
-  "FINANCE_REDIRECT": {
-    "description": "Redirect finance/refund inquiries",
-    "english": "For finance related queries, please contact:\n+92 334 3926 1195",
-    "urdu": "Finance queries ke liye yahan contact karein:\n+92 334 3926 1195"
-  },
-  "STUDENT_SUPPORT_REDIRECT": {
-    "description": "Redirect existing student support queries",
-    "english": "For student support, please contact:\n+92 330 3966662",
-    "urdu": "Student support ke liye yahan contact karein:\n+92 330 3966662"
-  },
-  "MULTIPLE_COURSE_DETAILS": {
-    "description": "When user asks for multiple course details (max 3, NO fee, MUST fetch from Course_Details)",
-    "english": "Here are the details:\n\n1- {Course_Name_1}\n- Duration: {Course_Duration_1}\n- Mode: {Mode_1}\n- Professor: {Professor_1}\n\n2- {Course_Name_2}\n- Duration: {Course_Duration_2}\n- Mode: {Mode_2}\n- Professor: {Professor_2}\n\nWhich one interests you more?",
-    "urdu": "Yeh rahi details:\n\n1- {Course_Name_1}\n- Duration: {Course_Duration_1}\n- Mode: {Mode_1}\n- Professor: {Professor_1}\n\n2- {Course_Name_2}\n- Duration: {Course_Duration_2}\n- Mode: {Mode_2}\n- Professor: {Professor_2}\n\nKaunsa course zyada pasand aya?"
-  },
+
   "COURSE_DETAILS_WITHOUT_FEE": {
-    "description": "Share course details WITHOUT fee (default when user doesn't explicitly ask price)",
-    "english": "{course_name} details:\n\nDuration: {Course_Duration}\nMode: {Mode_of_Courses}\nProfessor: {Professor_Name}\n\nComplete details: {Pdf_Link}\n\nWant to watch demo?",
-    "urdu": "{course_name} ki details:\n\nDuration: {Course_Duration}\nMode: {Mode_of_Courses}\nProfessor: {Professor_Name}\n\nComplete details: {Pdf_Link}\n\nDemo dekhna chahein ge?"
+    "description": "Details without fee",
+    "urdu": "{course_name} ki details:\n\nDuration: {Course_Duration}\nMode: {Mode_of_Courses}\nProfessor: {Professor_Name}\n\nComplete details:\n{Pdf_Link}"
   },
+
   "COURSE_DETAILS_WITH_FEE": {
-    "description": "Share course details WITH fee (ONLY when user explicitly asks for price/fee)",
-    "english": "{course_name} fee details:\n\nFee: {Course_Fee} PKR\nDuration: {Course_Duration}\nNext batch: {Course_Start_Date}\n\nWant to know how to enroll?",
-    "urdu": "{course_name} ki fee:\n\nFee: {Course_Fee} PKR\nDuration: {Course_Duration}\nNext batch: {Course_Start_Date}\n\nEnrollment ka tareeqa janana chahein ge?"
+    "description": "Fee details (only when asked)",
+    "urdu": "{course_name} ki details:\n\nFee: {Course_Fee} PKR\nDuration: {Course_Duration}\nNext batch: {Course_Start_Date}\n\nEnrollment process janana chahein ge?"
   },
-  "TOTAL_INVESTMENT": {
-    "description": "Total cost breakdown when user asks total investment/kharcha",
-    "english": "{course_name} total investment:\n\nCourse Fee: {Course_Fee} PKR\n\nThis includes:\n- Complete course access\n- Recorded lectures\n- 1 year mentorship\n- Certificate\n- Job placement support\n\nNo hidden charges.",
-    "urdu": "{course_name} ki total investment:\n\nCourse Fee: {Course_Fee} PKR\n\nIs mein shamil hai:\n- Complete course access\n- Recorded lectures\n- 1 saal mentorship\n- Certificate\n- Job placement support\n\nKoi hidden charges nahi."
+
+  "PAYMENT_DETAILS": {
+    "description": "Payment details",
+    "urdu": "{name}, yeh payment details hain:\n\nCourse: {course_name}\nDuration: {Course_Duration}\nFee: {Course_Fee} PKR\n\nBank: Bank Alfalah\nAccount Title: INSTITUTE OF CORPORATE AND TAXATION\nAccount No: 55045001664766\nIBAN: PK91ALFH5504005001664766\n\nPayment ke baad screenshot share kar dein."
   },
-  "PRE_RECORDED_ONLY": {
-    "description": "When user only wants pre-recorded lectures",
-    "english": "Yes, you can get access to recorded lectures from the last completed batch.\n\nWant me to share the details?",
-    "urdu": "Ji, ap ko last batch ki recorded lectures mil sakti hain.\n\nDetails share karun?"
+
+  "PAYMENT_SCREENSHOT_RECEIVED": {
+    "description": "Confirm payment",
+    "urdu": "Shukriya {name}!\n\nScreenshot mil gaya hai.\n\nTeam verify karke confirmation bhej degi."
   },
-  "YES_RESPONSE_DEMO": {
-    "description": "When user says yes to demo offer",
-    "english": "Here is the demo class:\n{Demo_Link}\n\nLet me know what you think!",
-    "urdu": "Ye raha demo:\n{Demo_Link}\n\nBatayein kaisa laga!"
+
+  "NO_TIME_RESPONSE": {
+    "description": "No time response",
+    "urdu": "Koi masla nahi.\n\nRecorded lectures portal pe available hoti hain.\n\nAp apne time pe dekh sakte hain."
   },
-  "YES_RESPONSE_DETAILS": {
-    "description": "When user says yes to details offer",
-    "english": "Here are the complete details:\n{Pdf_Link}\n\nAny questions?",
-    "urdu": "Ye rahi complete details:\n{Pdf_Link}\n\nKoi sawal?"
+
+  "DISCOUNT_REQUEST": {
+    "description": "Discount handling",
+    "urdu": "Abhi koi discount available nahi hai.\n\nMain ap ki request admission team tak pohancha deta hun."
   },
-  "YES_RESPONSE_ENROLLMENT": {
-    "description": "When user says yes to enrollment inquiry",
-    "english": "Great! Would you like me to share the payment details?",
-    "urdu": "Bohat acha! Payment details share karun?"
+
+  "AI_ACCUSATION": {
+    "description": "User says you are AI",
+    "urdu": "Nahi ji, main real insaan hun.\n\nICT se hoon aur ap ki madad ke liye yahan hun."
   },
-  "GENERAL_QUESTION_RESPONSE": {
-    "description": "Acknowledge and answer general questions",
-    "english": "{answer}\n\nAnything else you would like to know?",
-    "urdu": "{answer}\n\nAur kuch janana chahein ge?"
+
+  "NON_ICT_TOPIC": {
+    "description": "Non-ICT query",
+    "urdu": "Main sirf ICT courses ke hawale se madad kar sakta hun.\n\nKoi course janana chahein?"
   },
-  "ADMISSION_GENERAL": {
-    "description": "General admission contact",
-    "english": "For admission queries, please contact:\n+92 371 0194615",
-    "urdu": "Admission ke liye yahan contact karein:\n+92 371 0194615"
+
+  "LEGAL_INQUIRY_REDIRECT": {
+    "description": "Legal services",
+    "urdu": "Legal services ke liye rabta karein:\n+92 333 0102044"
+  },
+
+  "HR_JOB_REDIRECT": {
+    "description": "Jobs / HR",
+    "urdu": "ICT jobs ke liye rabta karein:\n+92 333 0102040"
+  },
+
+  "IT_COURSES_REDIRECT": {
+    "description": "IT / IDT courses",
+    "urdu": "IT courses ke liye IDT se rabta karein:\n+92 334 3975195"
+  },
+
+  "FINANCE_REDIRECT": {
+    "description": "Finance / refund",
+    "urdu": "Finance queries ke liye rabta karein:\n+92 334 39261195"
+  },
+
+  "STUDENT_SUPPORT_REDIRECT": {
+    "description": "Existing students",
+    "urdu": "Student support ke liye rabta karein:\n+92 330 3966662"
   }
 }
