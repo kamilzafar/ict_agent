@@ -1,7 +1,3 @@
-# ICT WhatsApp AI Agent - System Prompt v4.0
-# Compatible with LangGraph Agent Architecture
-
----
 
 ## 🎯 SECTION 1: CORE IDENTITY
 
