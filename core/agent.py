@@ -213,6 +213,7 @@ You help leads with course enrollment through WhatsApp conversations."""
         state["recent_history"] = recent_history
         
         # Store context documents for response tracking
+        # This ensures context is always available in the response
         from langchain_core.documents import Document
         context_docs = []
         if current_summary:
@@ -234,7 +235,12 @@ You help leads with course enrollment through WhatsApp conversations."""
                         "timestamp": turn.get("timestamp", "")
                     }
                 })
+        
+        # Always set context (even if empty) to ensure it's available in response
         state["context"] = context_docs
+        
+        # Log context retrieval for debugging
+        logger.debug(f"Retrieved context for {conversation_id}: summary={current_summary is not None}, recent_turns={len(recent_history)}, context_docs={len(context_docs)}")
         
         return state
     
@@ -560,27 +566,44 @@ Summary:"""
                             self.memory.update_lead_field(conversation_id, 'goal', metadata['goal'])
 
         # Work only with user-authored text for heuristics to avoid picking up assistant prompts
+        # Get the MOST RECENT user message for better detection
         user_text = ""
+        for msg in reversed(messages):  # Start from most recent
+            if isinstance(msg, HumanMessage) and hasattr(msg, "content"):
+                user_text = msg.content  # Use only the most recent message
+                break
+        
+        # Also collect all user messages for comprehensive analysis
+        all_user_text = ""
         for msg in messages:
             if isinstance(msg, HumanMessage) and hasattr(msg, "content"):
-                user_text += msg.content + " "
+                all_user_text += msg.content + " "
 
         user_text_lower = user_text.lower()
+        all_user_text_lower = all_user_text.lower()
 
         # Basic name extraction when tool data is not available
+        # Check both recent message and all messages
         if not lead_data_snapshot.get("name"):
-            name_match = re.search(r"(?:my name is|i am|i'm|this is)\s+([A-Za-z][A-Za-z\s]{1,40})", user_text, re.IGNORECASE)
+            # Try recent message first
+            name_match = re.search(r"(?:my name is|i am|i'm|this is|mera naam|main)\s+([A-Za-z][A-Za-z\s]{1,40})", user_text, re.IGNORECASE)
+            if not name_match:
+                # Try all messages
+                name_match = re.search(r"(?:my name is|i am|i'm|this is|mera naam|main)\s+([A-Za-z][A-Za-z\s]{1,40})", all_user_text, re.IGNORECASE)
             if name_match:
                 candidate = name_match.group(1).strip(" .,!-")
-                if candidate:
+                if candidate and len(candidate) > 1:  # Ensure it's a valid name
                     self.memory.update_lead_field(conversation_id, "name", candidate)
+                    logger.debug(f"Extracted name: {candidate}")
 
         # Basic phone extraction
         if not lead_data_snapshot.get("phone"):
-            phone_match = re.search(r"(\+?\d[\d\s\-]{8,15}\d)", user_text)
+            phone_match = re.search(r"(\+?\d[\d\s\-]{8,15}\d)", all_user_text)
             if phone_match:
                 cleaned = re.sub(r"[^\d+]", "", phone_match.group(1))
-                self.memory.update_lead_field(conversation_id, "phone", cleaned)
+                if len(cleaned) >= 10:  # Valid phone number
+                    self.memory.update_lead_field(conversation_id, "phone", cleaned)
+                    logger.debug(f"Extracted phone: {cleaned}")
 
         # Basic education detection
         if not lead_data_snapshot.get("education_level"):
@@ -600,15 +623,31 @@ Summary:"""
                 "cima": "Professional",
             }
             for keyword, label in education_map.items():
-                if keyword in user_text_lower:
+                if keyword in all_user_text_lower:
                     self.memory.update_lead_field(conversation_id, "education_level", label)
+                    logger.debug(f"Extracted education: {label}")
                     break
 
-        # Detect course mentions
-        courses = ['cta', 'acca', 'uk taxation', 'uae taxation', 'us taxation', 'finance', 'accounting']
-        for course in courses:
-            if course in user_text_lower and not self.memory.get_lead_data(conversation_id).get('selected_course'):
-                self.memory.update_lead_field(conversation_id, 'selected_course', course.upper())
+        # Detect course mentions - improved detection
+        courses_map = {
+            'cta': 'CTA',
+            'certified tax advisor': 'CTA',
+            'acca': 'ACCA',
+            'uk taxation': 'UK_TAXATION',
+            'uae taxation': 'UAE_TAXATION',
+            'us taxation': 'USA_TAXATION',
+            'usa taxation': 'USA_TAXATION',
+            'finance': 'FINANCE',
+            'accounting': 'ACCOUNTING',
+            'company secretary': 'COMPANY_SECRETARY',
+            'sales tax': 'SALES_TAX',
+        }
+        
+        # Check all user messages for course mentions
+        for course_keyword, course_value in courses_map.items():
+            if course_keyword in all_user_text_lower and not self.memory.get_lead_data(conversation_id).get('selected_course'):
+                self.memory.update_lead_field(conversation_id, 'selected_course', course_value)
+                logger.debug(f"Extracted course: {course_value}")
                 break
 
     def _extract_conversation_text(self, messages: List[BaseMessage]) -> str:
@@ -686,6 +725,7 @@ Summary:"""
         assistant_response = assistant_messages[-1].content if assistant_messages else "I apologize, but I couldn't generate a response."
 
         # Extract and update lead data / stage tracking
+        # This must be called BEFORE saving conversation to ensure stage is updated
         self._extract_and_update_lead_data(conversation_id, final_state["messages"])
 
         # Save conversation to memory (without embedding - production optimization)
@@ -700,15 +740,41 @@ Summary:"""
             embed=False  # Production: Don't embed individual turns, only summaries
         )
         
-        # Get current stage and lead data
+        # Get context from final_state (populated by _retrieve_context)
+        # Ensure context is always returned, even if empty
+        context_used = final_state.get("context", [])
+        
+        # If context is empty, try to build it from recent history
+        # This ensures context is always available in the response
+        if not context_used:
+            # Fallback: build context from recent history if available
+            recent_history = final_state.get("recent_history", [])
+            if recent_history:
+                context_used = []
+                for turn in recent_history:
+                    context_used.append({
+                        "content": f"User: {turn.get('user_message', '')}\nAssistant: {turn.get('assistant_message', '')}",
+                        "metadata": {
+                            "conversation_id": conversation_id,
+                            "type": "recent_unsummarized_turn",
+                            "timestamp": turn.get("timestamp", "")
+                        }
+                    })
+                logger.debug(f"Built context from recent_history: {len(context_used)} items")
+            else:
+                logger.debug(f"No context available in final_state")
+        
+        # Get current stage and lead data (after extraction and update)
         current_stage = self.memory.get_stage(conversation_id)
         lead_data = self.memory.get_lead_data(conversation_id)
+        
+        logger.debug(f"Returning response - stage: {current_stage}, context_count: {len(context_used)}, lead_data: {lead_data}")
 
         return {
             "response": assistant_response,
             "conversation_id": conversation_id,
             "turn_count": turn_count + 1,
-            "context_used": final_state.get("context", []),
+            "context_used": context_used,
             "messages": final_state["messages"],
             "stage": current_stage,
             "lead_data": lead_data
