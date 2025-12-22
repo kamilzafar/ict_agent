@@ -11,7 +11,7 @@ logger = logging.getLogger(__name__)
 if TYPE_CHECKING:
     from core.sheets_cache import GoogleSheetsCacheService
 
-from langchain_core.messages import BaseMessage, HumanMessage, AIMessage, SystemMessage
+from langchain_core.messages import BaseMessage, HumanMessage, AIMessage, SystemMessage, trim_messages
 from langchain_openai import ChatOpenAI
 from langgraph.graph import StateGraph, END
 from langgraph.graph.message import add_messages
@@ -173,66 +173,158 @@ You help leads with course enrollment through WhatsApp conversations."""
     def _retrieve_context(self, state: AgentState) -> AgentState:
         """Retrieve relevant context from long-term memory.
         
-        IMPORTANT: Only retrieves context from the current conversation.
-        We don't search across conversations to avoid confusion.
+        Follows LangChain best practices:
+        - Stores summary in state for injection as context memory (not system prompt)
+        - Retrieves recent unsummarized conversation history
+        - Prepares context for efficient message injection
         """
         conversation_id = state.get("conversation_id")
         
         if not conversation_id:
             return state
         
-        # Get conversation summary for current conversation only
-        # This is the only context we need - the summary of previous turns in this conversation
+        # Get conversation summary (all summarized turns - cumulative)
+        # This will be injected as context memory, not in system prompt
         current_summary = self.memory.get_conversation_summary(conversation_id)
         
+        # Get recent conversation history (unsummarized turns) from memory
+        all_history = self.memory.get_conversation_history(conversation_id)
+        turn_count = len(all_history)
+        
+        # Calculate which turns are unsummarized
+        recent_history = []
+        if turn_count > 0:
+            num_complete_cycles = turn_count // self.summarize_interval
+            if num_complete_cycles > 0:
+                turns_since_last_summary = turn_count % self.summarize_interval
+                if turns_since_last_summary == 0:
+                    # At a summarization point, include these turns
+                    recent_history = all_history[-self.summarize_interval:]
+                else:
+                    # Only unsummarized turns remain
+                    recent_history = all_history[-turns_since_last_summary:]
+            else:
+                # No summarization yet, all turns are recent
+                recent_history = all_history
+        
+        # Store summary and recent history in state for efficient access
+        # Summary will be injected as context memory message
+        state["conversation_summary"] = current_summary
+        state["recent_history"] = recent_history
+        
+        # Store context documents for response tracking
+        from langchain_core.documents import Document
+        context_docs = []
         if current_summary:
-            # Format context text for system prompt
-            context_text = f"[Current conversation summary]: {current_summary}"
-            state["retrieved_context"] = context_text
-            
-            # Store context document for response (for debugging/tracking)
-            from langchain_core.documents import Document
-            summary_doc = Document(
-                page_content=current_summary,
-                metadata={
+            context_docs.append({
+                "content": current_summary,
+                "metadata": {
                     "conversation_id": conversation_id,
-                    "type": "summary"
+                    "type": "summary",
+                    "covers_all_summarized_turns": True
                 }
-            )
-            state["context"] = [{"content": summary_doc.page_content, "metadata": summary_doc.metadata}]
-        else:
-            # No summary yet (conversation is new or hasn't been summarized)
-            state["retrieved_context"] = ""
-            state["context"] = []
+            })
+        if recent_history:
+            for turn in recent_history:
+                context_docs.append({
+                    "content": f"User: {turn.get('user_message', '')}\nAssistant: {turn.get('assistant_message', '')}",
+                    "metadata": {
+                        "conversation_id": conversation_id,
+                        "type": "recent_unsummarized_turn",
+                        "timestamp": turn.get("timestamp", "")
+                    }
+                })
+        state["context"] = context_docs
         
         return state
     
     def _call_agent(self, state: AgentState) -> AgentState:
-        """Call the agent LLM."""
-        messages = state["messages"]
+        """Call the agent LLM with full context using LangChain best practices.
         
-        # Create system prompt
+        Efficiently provides:
+        - Summary as context memory (injected as message, not system prompt)
+        - ALL unsummarized messages sent to LLM
+        - Uses trim_messages for efficient message handling
+        """
+        messages = state["messages"]
+        conversation_id = state.get("conversation_id")
+        
+        # Get base system prompt (without summary/context - that goes as memory)
         system_prompt = self._get_system_prompt(state)
         system_message = SystemMessage(content=system_prompt)
         
-        # Prepare messages with system prompt
-        # The system prompt already includes the conversation summary (all summarized turns)
-        # We only need to include the most recent messages that haven't been summarized
-        agent_messages = [system_message]
-        
         # Filter out system messages (they're already in the system prompt)
-        # Keep only conversation messages (HumanMessage and AIMessage)
-        # These should only be the unsummarized turns (loaded in chat method)
         conversation_messages = [
             msg for msg in messages 
             if not isinstance(msg, SystemMessage)
         ]
         
-        # Add all conversation messages (they're already limited to unsummarized turns)
-        # The chat() method ensures we only load turns that haven't been summarized
-        agent_messages.extend(conversation_messages)
+        # Get summary from state (retrieved by _retrieve_context)
+        # Inject summary as context memory (not in system prompt)
+        summary = state.get("conversation_summary")
+        context_messages = []
         
-        # Call LLM
+        if summary:
+            # Inject summary as a context message for the LLM
+            # This follows LangChain best practices: context as memory, not system prompt
+            summary_context = SystemMessage(
+                content=f"[Conversation Summary - Context Memory]\n\nThis is a summary of all previous conversation turns that have been summarized:\n\n{summary}\n\nUse this summary to understand the full conversation history. The messages below are recent unsummarized turns."
+            )
+            context_messages.append(summary_context)
+        
+        # Calculate which messages are unsummarized
+        # We want to send ALL unsummarized messages to the LLM
+        all_history = self.memory.get_conversation_history(conversation_id)
+        turn_count = len(all_history)
+        
+        # Determine unsummarized messages
+        if turn_count > 0:
+            num_complete_cycles = turn_count // self.summarize_interval
+            if num_complete_cycles > 0:
+                turns_since_last_summary = turn_count % self.summarize_interval
+                if turns_since_last_summary == 0:
+                    # At summarization point, keep last summarize_interval turns
+                    unsummarized_turns = self.summarize_interval
+                else:
+                    # Keep only unsummarized turns
+                    unsummarized_turns = turns_since_last_summary
+            else:
+                # No summarization yet, all turns are unsummarized
+                unsummarized_turns = turn_count
+        else:
+            unsummarized_turns = 0
+        
+        # Calculate messages to keep: ALL unsummarized messages
+        # Each turn = 2 messages (user + assistant)
+        unsummarized_message_count = unsummarized_turns * 2
+        
+        # Use LangChain's trim_messages for efficient trimming
+        # Keep all unsummarized messages, plus a safety buffer
+        if len(conversation_messages) > unsummarized_message_count:
+            # Use trim_messages to efficiently keep only unsummarized messages
+            # This follows LangChain best practices for message trimming
+            trimmed = trim_messages(
+                conversation_messages,
+                max_tokens=unsummarized_message_count + (self.summarize_interval * 2),  # Safety buffer
+                strategy="last",  # Keep last N messages
+                token_counter=len,  # Count by message count
+                start_on="human",  # Ensure valid conversation structure
+                include_system=False,  # System message is separate
+                allow_partial=False  # Don't break message pairs
+            )
+            conversation_messages = trimmed if trimmed else conversation_messages[-unsummarized_message_count:]
+            logger.debug(f"Trimmed to {len(conversation_messages)} unsummarized messages (covering {unsummarized_turns} turns)")
+        else:
+            # All messages are unsummarized, keep them all
+            logger.debug(f"Keeping all {len(conversation_messages)} messages (all unsummarized)")
+        
+        # Prepare final messages following LangChain best practices:
+        # 1. System prompt (base instructions, tools, metadata - NO summary)
+        # 2. Summary as context memory (injected as message)
+        # 3. All unsummarized messages (actual conversation)
+        agent_messages = [system_message] + context_messages + conversation_messages
+        
+        # Call LLM with full context
         response = self.llm_with_tools.invoke(agent_messages)
         
         # Add response to messages
@@ -241,17 +333,13 @@ You help leads with course enrollment through WhatsApp conversations."""
         return state
     
     def _get_system_prompt(self, state: AgentState) -> str:
-        """Get the system prompt for the agent."""
+        """Get the system prompt for the agent.
+        
+        NOTE: Summary is NOT included here - it's injected as context memory in _call_agent
+        This keeps the system prompt focused on instructions, tools, and metadata.
+        """
         conversation_id = state.get("conversation_id", "unknown")
         turn_count = state.get("turn_count", 0)
-        
-        # Get conversation summary if available
-        summary = self.memory.get_conversation_summary(conversation_id)
-        summary_text = f"\n\nConversation Summary: {summary}" if summary else ""
-        
-        # Add retrieved context if available (from _retrieve_context)
-        retrieved_context = state.get("retrieved_context", "")
-        context_text = f"\n\nRetrieved Context from Previous Conversations:\n{retrieved_context}" if retrieved_context else ""
         
         # Use cached system prompt (loaded once at initialization)
         # This avoids file I/O on every request, improving performance
@@ -305,16 +393,16 @@ You help leads with course enrollment through WhatsApp conversations."""
                 sheets_context = f"\n\n## RELEVANT GOOGLE SHEETS DATA (Pre-loaded for your reference):\n{stage_context}\n"
                 sheets_context += "NOTE: This data is automatically loaded from Google Sheets cache. You can use this information directly without calling any tools.\n"
         
-        # Add conversation context
+        # Add conversation metadata
         context_info = f"""
-## CURRENT CONVERSATION CONTEXT:
+## CURRENT CONVERSATION METADATA:
 - Conversation ID: {conversation_id}
 - Turn Count: {turn_count}
-{summary_text}
+- Note: Conversation summary is provided as context memory (not in this system prompt)
 """
         
-        # Combine prompt with context
-        full_prompt = base_prompt + tool_info + context_info + context_text + sheets_context
+        # Combine prompt (NO summary here - it's injected as context memory)
+        full_prompt = base_prompt + tool_info + context_info + sheets_context
         
         return full_prompt
     
@@ -556,61 +644,7 @@ Summary:"""
         if not conversation_id:
             conversation_id = str(uuid.uuid4())
         
-        # Get current turn count and conversation history
-        all_conversation_history = self.memory.get_conversation_history(conversation_id)
-        turn_count = len(all_conversation_history)
-        
-        # Calculate which turns have been summarized
-        # After summarization, we should only load the most recent turns that haven't been summarized
-        # Example: If summarize_interval=10:
-        #   - Turns 1-10: All loaded (no summarization yet)
-        #   - Turn 11: Only turn 11 loaded (turns 1-10 are summarized)
-        #   - Turns 11-20: Only turns 11-20 loaded (turns 1-10 are summarized)
-        #   - Turn 21: Only turn 21 loaded (turns 1-20 are summarized)
-        
-        if turn_count > 0:
-            # Calculate how many complete summarization cycles have occurred
-            num_complete_cycles = turn_count // self.summarize_interval
-            
-            if num_complete_cycles > 0:
-                # We've had at least one summarization
-                # Only load the most recent turns that haven't been summarized yet
-                turns_since_last_summary = turn_count % self.summarize_interval
-                
-                if turns_since_last_summary == 0:
-                    # Exactly at a summarization point (e.g., turn 10, 20, 30)
-                    # Load the last summarize_interval turns (they will be summarized in this turn)
-                    # These are the turns since the last summarization
-                    conversation_history = all_conversation_history[-self.summarize_interval:]
-                else:
-                    # Load only the most recent turns that haven't been summarized
-                    # These are the turns since the last summarization
-                    conversation_history = all_conversation_history[-turns_since_last_summary:]
-            else:
-                # No summarization yet, load all turns (they're all recent)
-                conversation_history = all_conversation_history
-        else:
-            conversation_history = []
-        
-        # Load previous conversation history into messages
-        # This ensures the agent has context from previous turns that haven't been summarized
-        previous_messages = []
-        for turn in conversation_history:
-            # Add user message
-            previous_messages.append(HumanMessage(content=turn.get("user_message", "")))
-            # Add assistant message
-            previous_messages.append(AIMessage(content=turn.get("assistant_message", "")))
-        
-        # Create initial state with previous messages + current user message
-        initial_state = {
-            "messages": previous_messages + [HumanMessage(content=user_input)],
-            "conversation_id": conversation_id,
-            "turn_count": turn_count + 1,
-            "context": [],
-            "retrieved_context": ""  # Will be populated by _retrieve_context
-        }
-        
-        # Prepare config
+        # Prepare config with thread_id for checkpointer
         if config is None:
             config = {
                 "configurable": {
@@ -618,7 +652,29 @@ Summary:"""
                 }
             }
         
+        # Get current turn count from memory (for tracking)
+        all_conversation_history = self.memory.get_conversation_history(conversation_id)
+        turn_count = len(all_conversation_history)
+        
+        # IMPORTANT: With LangGraph checkpointer, pass only the new message
+        # The checkpointer automatically loads previous state and merges using add_messages reducer
+        # This ensures:
+        # 1. The checkpointer's memory is properly utilized
+        # 2. Previous messages are automatically loaded from checkpointer
+        # 3. New message is merged with existing messages
+        # 4. The _retrieve_context node will run and get summary + recent history
+        initial_state = {
+            "messages": [HumanMessage(content=user_input)],  # Only new message - checkpointer handles the rest
+            "conversation_id": conversation_id,
+            "turn_count": turn_count + 1,
+        }
+        
         # Run the graph
+        # The checkpointer will:
+        # 1. Load previous state for this thread_id (if exists)
+        # 2. Merge new messages with existing messages (using add_messages reducer)
+        # 3. The _retrieve_context node (entry point) will run and populate context
+        # 4. The agent node will receive all context (summary + recent messages from checkpointer)
         final_state = self.app.invoke(initial_state, config)
         
         # Extract assistant response
