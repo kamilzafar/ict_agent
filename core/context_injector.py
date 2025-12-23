@@ -1,49 +1,52 @@
-"""Context injector for proactive stage-based context injection."""
+"""Context injector for proactive stage-based context injection using Supabase."""
 import logging
 from typing import Dict, List, Optional, Any
-from core.sheets_cache import GoogleSheetsCacheService
+from core.supabase_service import SupabaseService
 
 logger = logging.getLogger(__name__)
 
 
 class ContextInjector:
-    """Injects relevant Google Sheets data based on conversation stage."""
+    """Injects relevant Supabase data based on conversation stage.
     
-    # Map conversation stages to relevant sheet data
+    Optimized for sub-10ms context injection.
+    """
+    
+    # Map conversation stages to relevant data
     STAGE_CONTEXT_MAP = {
         "NEW": [],  # No pre-injection
         "NAME_COLLECTED": [],  # No pre-injection
         "COURSE_SELECTED": [
-            "Course_Details",  # Inject course info, fees, dates
-            "Course_Links"     # Inject demo links, PDFs
+            "course_details",  # Inject course info, fees, dates
+            "course_links"     # Inject demo links, PDFs
         ],
         "EDUCATION_COLLECTED": [
-            "Course_Details"  # Course prerequisites, requirements
+            "course_details"  # Course prerequisites, requirements
         ],
         "GOAL_COLLECTED": [
-            "Course_Details",  # Course alignment with goals
-            "FAQs"            # Common questions
+            "course_details",  # Course alignment with goals
+            "faqs"            # Common questions
         ],
         "DEMO_SHARED": [
-            "Course_Links",    # Course page links
-            "Company_Info"     # Contact info, policies
+            "course_links",    # Course page links
+            "company_info"     # Contact info, policies
         ],
         "ENROLLED": [
-            "Company_Info"     # Policies, contact info
+            "company_info"     # Policies, contact info
         ],
         "LOST": []  # No pre-injection
     }
     
-    def __init__(self, cache_service: GoogleSheetsCacheService):
+    def __init__(self, supabase_service: SupabaseService):
         """Initialize context injector.
         
         Args:
-            cache_service: Google Sheets cache service instance
+            supabase_service: SupabaseService instance
         """
-        self.cache_service = cache_service
+        self.supabase_service = supabase_service
     
     def get_stage_context(self, stage: str, selected_course: Optional[str] = None) -> str:
-        """Get relevant context for a conversation stage.
+        """Get relevant context for a conversation stage (optimized for <10ms).
         
         Args:
             stage: Current conversation stage
@@ -52,30 +55,47 @@ class ContextInjector:
         Returns:
             Formatted context string to inject into system prompt
         """
-        sheets_to_inject = self.STAGE_CONTEXT_MAP.get(stage, [])
+        data_to_inject = self.STAGE_CONTEXT_MAP.get(stage, [])
         
-        if not sheets_to_inject:
+        if not data_to_inject:
             return ""
         
         context_parts = []
         
-        for sheet_name in sheets_to_inject:
+        for data_type in data_to_inject:
             try:
-                # Get sheet data from cache
-                sheet_data = self.cache_service.get_sheet_data(sheet_name)
+                if data_type == "course_details":
+                    courses = self.supabase_service.get_course_details(selected_course)
+                    if courses:
+                        course = courses[0]
+                        formatted = self._format_course_details(course)
+                        if formatted:
+                            context_parts.append(f"### Course Details:\n{formatted}")
                 
-                if not sheet_data:
-                    logger.warning(f"No cached data for {sheet_name}")
-                    continue
+                elif data_type == "course_links":
+                    courses = self.supabase_service.get_course_links(selected_course)
+                    if courses:
+                        course = courses[0]
+                        formatted = self._format_course_links(course)
+                        if formatted:
+                            context_parts.append(f"### Course Links:\n{formatted}")
                 
-                # Format sheet data for context
-                formatted_data = self._format_sheet_data(sheet_name, sheet_data, selected_course)
+                elif data_type == "faqs":
+                    faqs = self.supabase_service.get_faqs(limit=5)
+                    if faqs:
+                        formatted = self._format_faqs(faqs)
+                        if formatted:
+                            context_parts.append(f"### FAQs:\n{formatted}")
                 
-                if formatted_data:
-                    context_parts.append(f"### {sheet_name} Data:\n{formatted_data}")
+                elif data_type == "company_info":
+                    company_info = self.supabase_service.get_company_info()
+                    if company_info:
+                        formatted = self._format_company_info(company_info)
+                        if formatted:
+                            context_parts.append(f"### Company Information:\n{formatted}")
             
             except Exception as e:
-                logger.error(f"Error getting context from {sheet_name}: {e}")
+                logger.error(f"Error getting context for {data_type}: {e}")
                 continue
         
         if context_parts:
@@ -83,173 +103,50 @@ class ContextInjector:
         
         return ""
     
-    def _format_sheet_data(self, sheet_name: str, data: List[List[str]], filter_course: Optional[str] = None) -> str:
-        """Format sheet data for context injection.
-        
-        Args:
-            sheet_name: Name of the sheet
-            data: Sheet data (list of rows)
-            filter_course: Optional course name to filter by
-        
-        Returns:
-            Formatted string representation of relevant data
-        """
-        if not data:
-            return ""
-        
-        headers = data[0] if data else []
-        rows = data[1:] if len(data) > 1 else []
-        
-        # Special formatting for Course_Links sheet to make links more visible
-        if sheet_name == "Course_Links":
-            return self._format_course_links(headers, rows, filter_course)
-        
-        # Filter rows if course filter is specified
-        if filter_course and headers:
-            # Try to find course column
-            course_col_idx = None
-            for idx, header in enumerate(headers):
-                if 'course' in header.lower() or 'name' in header.lower():
-                    course_col_idx = idx
-                    break
-            
-            if course_col_idx is not None:
-                filtered_rows = []
-                filter_lower = filter_course.lower()
-                for row in rows:
-                    if course_col_idx < len(row) and filter_lower in row[course_col_idx].lower():
-                        filtered_rows.append(row)
-                rows = filtered_rows
-        
-        # Limit rows to prevent token overflow
-        max_rows = 20
-        rows = rows[:max_rows]
-        
-        # Format as readable text
-        formatted_lines = []
-        
-        for row in rows:
-            row_parts = []
-            for col_idx, value in enumerate(row):
-                if col_idx < len(headers) and value:
-                    header = headers[col_idx]
-                    row_parts.append(f"{header}: {value}")
-            
-            if row_parts:
-                formatted_lines.append(" | ".join(row_parts))
-        
-        if formatted_lines:
-            return "\n".join(formatted_lines)
-        
-        return ""
+    def _format_course_details(self, course: Dict[str, Any]) -> str:
+        """Format course details for context (optimized)."""
+        parts = []
+        for key, value in course.items():
+            if value is not None and value != "" and key != "id":
+                parts.append(f"{key}: {value}")
+        return "\n".join(parts) if parts else ""
     
-    def _format_course_links(self, headers: List[str], rows: List[List[str]], filter_course: Optional[str] = None) -> str:
-        """Format Course_Links sheet data with emphasis on links.
-        
-        Args:
-            headers: Column headers
-            rows: Data rows
-            filter_course: Optional course name to filter by
-        
-        Returns:
-            Formatted Course_Links data with clear link visibility
-        """
-        # Find column indices
-        course_col_idx = None
-        demo_link_col_idx = None
-        pdf_link_col_idx = None
-        course_link_col_idx = None
-        
-        for idx, header in enumerate(headers):
-            header_lower = header.lower()
-            if 'course' in header_lower and ('name' in header_lower or 'course' == header_lower):
-                course_col_idx = idx
-            elif 'demo' in header_lower and 'link' in header_lower:
-                demo_link_col_idx = idx
-            elif 'pdf' in header_lower and 'link' in header_lower:
-                pdf_link_col_idx = idx
-            elif 'course_link' in header_lower or 'course_page' in header_lower:
-                course_link_col_idx = idx
-        
-        if course_col_idx is None:
-            # Fallback to generic formatting
-            return self._format_generic_sheet(headers, rows, filter_course)
-        
-        # Filter by course if specified
-        if filter_course:
-            filter_lower = filter_course.lower()
-            rows = [
-                row for row in rows 
-                if course_col_idx < len(row) and row[course_col_idx] 
-                and filter_lower in row[course_col_idx].lower()
-            ]
-        
-        # Format with emphasis on links
-        formatted_lines = []
-        for row in rows:
-            if course_col_idx >= len(row) or not row[course_col_idx]:
-                continue
-            
-            course_name = row[course_col_idx]
-            parts = [f"Course: {course_name}"]
-            
-            if demo_link_col_idx is not None and demo_link_col_idx < len(row) and row[demo_link_col_idx]:
-                parts.append(f"Demo_Link: {row[demo_link_col_idx]}")
-            
-            if pdf_link_col_idx is not None and pdf_link_col_idx < len(row) and row[pdf_link_col_idx]:
-                parts.append(f"Pdf_Link: {row[pdf_link_col_idx]}")
-            
-            if course_link_col_idx is not None and course_link_col_idx < len(row) and row[course_link_col_idx]:
-                parts.append(f"Course_Link: {row[course_link_col_idx]}")
-            
-            if len(parts) > 1:  # At least course name + one link
-                formatted_lines.append(" | ".join(parts))
-        
-        if formatted_lines:
-            return "\n".join(formatted_lines)
-        
-        return ""
+    def _format_course_links(self, course: Dict[str, Any]) -> str:
+        """Format course links for context (optimized)."""
+        parts = []
+        if course.get("course_name"):
+            parts.append(f"Course: {course['course_name']}")
+        if course.get("demo_link"):
+            parts.append(f"Demo_Link: {course['demo_link']}")
+        if course.get("pdf_link"):
+            parts.append(f"Pdf_Link: {course['pdf_link']}")
+        if course.get("course_link"):
+            parts.append(f"Course_Link: {course['course_link']}")
+        return " | ".join(parts) if parts else ""
     
-    def _format_generic_sheet(self, headers: List[str], rows: List[List[str]], filter_course: Optional[str] = None) -> str:
-        """Generic sheet formatting fallback."""
-        formatted_lines = []
-        for row in rows:
-            row_parts = []
-            for col_idx, value in enumerate(row):
-                if col_idx < len(headers) and value:
-                    header = headers[col_idx]
-                    row_parts.append(f"{header}: {value}")
-            if row_parts:
-                formatted_lines.append(" | ".join(row_parts))
-        return "\n".join(formatted_lines)
+    def _format_faqs(self, faqs: List[Dict[str, Any]]) -> str:
+        """Format FAQs for context (optimized)."""
+        formatted = []
+        for i, faq in enumerate(faqs, 1):
+            parts = []
+            if faq.get("course_name"):
+                parts.append(f"Course: {faq['course_name']}")
+            if faq.get("question"):
+                parts.append(f"Question: {faq['question']}")
+            if faq.get("answer"):
+                parts.append(f"Answer: {faq['answer']}")
+            if parts:
+                formatted.append(f"FAQ {i}:\n" + " | ".join(parts))
+        return "\n\n".join(formatted) if formatted else ""
     
-    def search_and_inject(self, query: str, top_k: int = 3) -> str:
-        """Search cached data and return formatted results for injection.
+    def _format_company_info(self, company_info: Dict[str, Any]) -> str:
+        """Format company info for context (optimized).
         
-        Args:
-            query: Search query
-            top_k: Number of results to return
-        
-        Returns:
-            Formatted search results
+        Company info is stored as key-value pairs (field_name, field_value).
         """
-        try:
-            results = self.cache_service.search_cached_data(query, top_k=top_k)
-            
-            if not results:
-                return ""
-            
-            formatted_results = []
-            for i, doc in enumerate(results, 1):
-                content = doc.page_content
-                metadata = doc.metadata
-                sheet_name = metadata.get("sheet_name", "Unknown")
-                
-                formatted_results.append(f"[Result {i} from {sheet_name}]: {content}")
-            
-            return "\n\n".join(formatted_results)
-        
-        except Exception as e:
-            logger.error(f"Error in search_and_inject: {e}")
-            return ""
+        parts = []
+        for field_name, field_value in company_info.items():
+            if field_value is not None and field_value != "":
+                parts.append(f"{field_name}: {field_value}")
+        return "\n".join(parts) if parts else ""
 

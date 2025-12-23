@@ -21,8 +21,7 @@ from pydantic import BaseModel, Field, field_validator
 from dotenv import load_dotenv
 
 from core.agent import IntelligentChatAgent
-from core.sheets_cache import GoogleSheetsCacheService
-from core.background_tasks import fallback_polling_task
+from core.supabase_service import SupabaseService
 
 # Load environment variables
 load_dotenv()
@@ -41,8 +40,8 @@ logger = logging.getLogger(__name__)
 # Global agent instance
 agent: Optional[IntelligentChatAgent] = None
 
-# Global cache service instance
-sheets_cache_service: Optional[GoogleSheetsCacheService] = None
+# Global Supabase service instance
+supabase_service: Optional[SupabaseService] = None
 
 # API Key Security
 API_KEY_HEADER = APIKeyHeader(name="X-API-Key", auto_error=False)
@@ -93,7 +92,7 @@ def verify_api_key(api_key: Optional[str] = Security(API_KEY_HEADER)) -> bool:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Lifespan context manager for FastAPI app."""
-    global agent, sheets_cache_service
+    global agent, supabase_service
     
     # Startup: Initialize agent
     logger.info("Initializing AI agent...")
@@ -109,107 +108,53 @@ async def lifespan(app: FastAPI):
         logger.warning("API_KEY environment variable is not set. API endpoints will be protected but will fail until API_KEY is configured.")
         logger.warning("Please set API_KEY environment variable to enable API authentication.")
     
-    # Initialize Google Sheets cache service (if configured)
-    polling_task = None
+    # Initialize Supabase service (if configured)
     try:
-        # Check if Google Sheets is configured (either service account or OAuth2)
-        has_service_account = bool(os.getenv("GOOGLE_SHEETS_CREDENTIALS_PATH"))
-        has_oauth2 = bool(
-            os.getenv("GOOGLE_SHEETS_CLIENT_ID") and 
-            os.getenv("GOOGLE_SHEETS_CLIENT_SECRET") and 
-            os.getenv("GOOGLE_SHEETS_REFRESH_TOKEN")
-        )
-        has_spreadsheet_id = bool(os.getenv("GOOGLE_SHEETS_SPREADSHEET_ID"))
+        supabase_url = os.getenv("SUPABASE_URL")
+        supabase_key = os.getenv("SUPABASE_KEY")
         
-        if (has_service_account or has_oauth2) and has_spreadsheet_id:
-            logger.info("Initializing Google Sheets cache service...")
+        if supabase_url and supabase_key:
+            logger.info("Initializing Supabase service...")
             try:
-                sheets_cache_service = GoogleSheetsCacheService(
-                    redis_host=os.getenv("REDIS_HOST", "localhost"),
-                    redis_port=int(os.getenv("REDIS_PORT", "6379")),
-                    redis_password=os.getenv("REDIS_PASSWORD"),
-                    redis_db=int(os.getenv("REDIS_DB", "0")),
-                    chroma_db_path=os.getenv("CHROMA_DB_PATH", "/app/sheets_index_db")
+                supabase_service = SupabaseService(
+                    supabase_url=supabase_url,
+                    supabase_key=supabase_key
                 )
-                
-                # Pre-load all sheets on startup (only from one worker to avoid DB locking)
-                # Use file lock to ensure only one worker pre-loads
-                lock_file_path = Path(os.getenv("CHROMA_DB_PATH", "/app/sheets_index_db")) / ".preload.lock"
-                lock_file_path.parent.mkdir(parents=True, exist_ok=True)
-                
-                should_preload = False
-                lock_file = None
-                
-                if not lock_file_path.exists():
-                    should_preload = True
-                else:
-                    with open(lock_file_path, "r") as f:
-                        lock_file = f.read()
-                        if lock_file.strip() == "1":
-                            should_preload = False
-                        else:
-                            should_preload = True
-                            
-                if should_preload:
-                    logger.info("Pre-loading sheets...")
-                    with open(lock_file_path, "w") as f:
-                        f.write("1")
-                    try:
-                        sheets_cache_service.preload_all_sheets()
-                        logger.info("Sheets pre-loaded successfully")
-                    except Exception as e:
-                        logger.error(f"Error pre-loading sheets: {e}", exc_info=True)
-                        # Don't raise - app can still work without pre-loaded sheets
-                    finally:
-                        if lock_file:
-                            with open(lock_file_path, "w") as f:
-                                f.write("0")
-                        lock_file_path.unlink()
-                else:
-                    logger.info("Sheets already pre-loaded")
-                    
-                logger.info("✓ Google Sheets cache service initialized successfully")
-            except Exception as sheets_error:
-                # Google Sheets initialization failed - log warning but don't crash app
+                logger.info("✓ Supabase service initialized successfully")
+            except Exception as supabase_error:
+                # Supabase initialization failed - log warning but don't crash app
                 logger.warning("=" * 70)
-                logger.warning("⚠️  Google Sheets cache service initialization failed!")
-                logger.warning(f"Error: {sheets_error}")
-                logger.warning("The app will continue without Google Sheets caching.")
+                logger.warning("⚠️  Supabase service initialization failed!")
+                logger.warning(f"Error: {supabase_error}")
+                logger.warning("The app will continue without Supabase.")
                 logger.warning("")
-                logger.warning("To fix Google Sheets authentication:")
-                if has_oauth2:
-                    logger.warning("  1. Verify OAuth2 credentials in .env:")
-                    logger.warning("     - GOOGLE_SHEETS_CLIENT_ID")
-                    logger.warning("     - GOOGLE_SHEETS_CLIENT_SECRET")
-                    logger.warning("     - GOOGLE_SHEETS_REFRESH_TOKEN")
-                    logger.warning("  2. Check that refresh token is valid (not expired/revoked)")
-                    logger.warning("  3. Verify OAuth2 client exists in Google Cloud Console")
-                else:
-                    logger.warning("  1. Set GOOGLE_SHEETS_CREDENTIALS_PATH to service account JSON")
-                    logger.warning("  2. Or configure OAuth2 credentials")
-                logger.warning("  4. Verify GOOGLE_SHEETS_SPREADSHEET_ID is correct")
+                logger.warning("To fix Supabase configuration:")
+                logger.warning("  1. Set SUPABASE_URL in .env (your Supabase project URL)")
+                logger.warning("  2. Set SUPABASE_KEY in .env (your Supabase anon/service key)")
+                logger.warning("  3. Verify credentials are correct")
+                logger.warning("  4. Ensure database tables are created (course_links, course_details, faqs, professors, company_info)")
                 logger.warning("  5. Restart the application after fixing credentials")
                 logger.warning("=" * 70)
-                sheets_cache_service = None  # Set to None so agent can still initialize
+                supabase_service = None  # Set to None so agent can still initialize
         else:
-            logger.info("Google Sheets not configured - skipping cache service initialization")
-            logger.info("To enable Google Sheets, set:")
-            logger.info("  - GOOGLE_SHEETS_SPREADSHEET_ID")
-            logger.info("  - Either GOOGLE_SHEETS_CREDENTIALS_PATH (service account)")
-            logger.info("    Or GOOGLE_SHEETS_CLIENT_ID/CLIENT_SECRET/REFRESH_TOKEN (OAuth2)")
-            sheets_cache_service = None
+            logger.info("Supabase not configured - skipping service initialization")
+            logger.info("To enable Supabase, set:")
+            logger.info("  - SUPABASE_URL (your Supabase project URL)")
+            logger.info("  - SUPABASE_KEY (your Supabase anon/service key)")
+            supabase_service = None
     except Exception as e:
-        # Catch any unexpected errors and make Google Sheets optional
-        logger.warning(f"Unexpected error during Google Sheets initialization: {e}", exc_info=True)
-        logger.warning("Continuing without Google Sheets cache service")
-        sheets_cache_service = None
+        # Catch any unexpected errors and make Supabase optional
+        logger.warning(f"Unexpected error during Supabase initialization: {e}", exc_info=True)
+        logger.warning("Continuing without Supabase service")
+        supabase_service = None
+    
     try:
         agent = IntelligentChatAgent(
             model_name=os.getenv("MODEL_NAME", "gpt-4.1-mini"),  # Default to gpt-4.1-mini for 128k context window
             temperature=float(os.getenv("TEMPERATURE", "0.7")),
             memory_db_path=os.getenv("MEMORY_DB_PATH", "/app/memory_db"),
             summarize_interval=int(os.getenv("SUMMARIZE_INTERVAL", "10")),
-            sheets_cache_service=sheets_cache_service
+            supabase_service=supabase_service
         )
         logger.info("Agent initialized successfully")
         logger.info(f"Model: {os.getenv('MODEL_NAME', 'gpt-4.1-mini')}")
@@ -236,12 +181,6 @@ async def lifespan(app: FastAPI):
     yield
     
     # Shutdown: Cleanup
-    if polling_task:
-        polling_task.cancel()
-        try:
-            await polling_task
-        except asyncio.CancelledError:
-            pass
     logger.info("Shutting down...")
 
 
@@ -466,53 +405,77 @@ async def root():
     }
 
 
-@app.get("/debug/sheets", tags=["Debug"])
-async def debug_sheets():
-    """Debug endpoint to test Google Sheets connection and list available sheets."""
-    if not sheets_cache_service:
+@app.get("/debug/supabase", tags=["Debug"])
+async def debug_supabase():
+    """Debug endpoint to test Supabase connection."""
+    if not supabase_service:
         return {
-            "error": "Google Sheets cache service not initialized",
-            "spreadsheet_id": os.getenv("GOOGLE_SHEETS_SPREADSHEET_ID", "Not set"),
-            "configured_sheets": os.getenv("GOOGLE_SHEETS_SHEET_NAMES", "Not set")
+            "error": "Supabase service not initialized",
+            "supabase_url": os.getenv("SUPABASE_URL", "Not set")
         }
     
     try:
-        available_sheets = sheets_cache_service.list_available_sheets()
+        # Test connection by fetching a small amount of data
+        test_courses = supabase_service.get_course_links()
         return {
             "status": "success",
-            "spreadsheet_id": sheets_cache_service.spreadsheet_id,
-            "configured_sheets": sheets_cache_service.sheet_names,
-            "available_sheets": available_sheets,
-            "sheets_match": all(s in available_sheets for s in sheets_cache_service.sheet_names),
-            "missing_sheets": [s for s in sheets_cache_service.sheet_names if s not in available_sheets]
+            "supabase_url": os.getenv("SUPABASE_URL", "Not set"),
+            "connection": "ok",
+            "test_query": "successful",
+            "cache_enabled": True,
+            "realtime_enabled": os.getenv("SUPABASE_REALTIME_ENABLED", "true").lower() == "true"
         }
     except Exception as e:
         return {
             "status": "error",
-            "spreadsheet_id": sheets_cache_service.spreadsheet_id,
-            "configured_sheets": sheets_cache_service.sheet_names,
+            "supabase_url": os.getenv("SUPABASE_URL", "Not set"),
             "error": str(e),
             "error_type": type(e).__name__
         }
 
 
+@app.post("/admin/cache/clear", tags=["Admin"], dependencies=[Depends(verify_api_key)])
+async def clear_cache(table: Optional[str] = None):
+    """Clear Supabase cache for instant updates after data changes.
+    
+    Use this endpoint after updating data in Supabase to see changes immediately.
+    Note: If Realtime is enabled, cache clears automatically (no need to call this).
+    
+    Args:
+        table: Optional table name (e.g., "course_links"), or None to clear all
+    """
+    if not supabase_service:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Supabase service not initialized"
+        )
+    
+    supabase_service.clear_cache(table)
+    return {
+        "status": "success",
+        "message": f"Cache cleared for {table or 'all tables'}",
+        "note": "Next query will fetch fresh data from Supabase"
+    }
+
+
 @app.get("/health", tags=["Health"], response_model=HealthResponse)
 async def health_check():
     """Health check endpoint with comprehensive status."""
-    redis_connected = False
-    if sheets_cache_service and sheets_cache_service.redis_client:
+    supabase_connected = False
+    if supabase_service:
         try:
-            sheets_cache_service.redis_client.ping()
-            redis_connected = True
+            # Test connection with a simple query
+            supabase_service.get_company_info()
+            supabase_connected = True
         except Exception:
-            redis_connected = False
+            supabase_connected = False
     
     return HealthResponse(
         status="healthy" if agent is not None else "degraded",
         agent_initialized=agent is not None,
         memory_db_path=os.getenv("MEMORY_DB_PATH", "./memory_db"),
-        sheets_cache_initialized=sheets_cache_service is not None,
-        redis_connected=redis_connected,
+        sheets_cache_initialized=supabase_service is not None,  # Reusing field name for compatibility
+        redis_connected=supabase_connected,  # Reusing field name for compatibility
         version="1.0.0"
     )
 
@@ -931,97 +894,7 @@ async def get_conversation_stage(conversation_id: str):
         )
 
 
-# Webhook Models
-class WebhookPayload(BaseModel):
-    """Payload model for Google Sheets webhook."""
-    spreadsheet_id: str = Field(..., description="Google Sheets spreadsheet ID")
-    sheet_name: str = Field(..., description="Name of the sheet that was updated")
-    action: str = Field(default="updated", description="Action type (updated, form_submitted, manual_sync)")
-    timestamp: Optional[str] = Field(None, description="Timestamp of the update")
-
-
-@app.post("/webhooks/google-sheets-update", tags=["Webhooks"])
-async def google_sheets_webhook(
-    payload: WebhookPayload,
-    request: Request,
-    x_webhook_secret: Optional[str] = Header(None, alias="X-Webhook-Secret")
-):
-    """Webhook endpoint for real-time Google Sheets updates.
-    
-    This is the PRIMARY sync mechanism - updates happen instantly when
-    sheets are modified via Google Apps Script trigger.
-    
-    Args:
-        payload: Webhook payload with sheet information
-        request: FastAPI request object
-        x_webhook_secret: Webhook secret from header
-    
-    Returns:
-        Status of the update operation
-    """
-    # Check if webhook is enabled
-    webhook_enabled = os.getenv("SHEETS_WEBHOOK_ENABLED", "true").lower() == "true"
-    if not webhook_enabled:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Webhook endpoint is disabled"
-        )
-    
-    # Verify webhook secret
-    expected_secret = os.getenv("SHEETS_WEBHOOK_SECRET")
-    if not expected_secret:
-        logger.error("SHEETS_WEBHOOK_SECRET not configured")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Webhook not configured"
-        )
-    
-    if not x_webhook_secret or x_webhook_secret != expected_secret:
-        logger.warning(f"Invalid webhook secret attempt from {request.client.host if request.client else 'unknown'}")
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Unauthorized"
-        )
-    
-    # Check if cache service is initialized
-    if sheets_cache_service is None:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Google Sheets cache service not initialized"
-        )
-    
-    try:
-        logger.info(f"Webhook received: {payload.sheet_name} updated (action: {payload.action})")
-        
-        # Immediately sync the sheet
-        updated = sheets_cache_service.sync_sheet(payload.sheet_name)
-        
-        if updated:
-            logger.info(f"Successfully updated cache for {payload.sheet_name}")
-            return {
-                "status": "success",
-                "sheet": payload.sheet_name,
-                "updated": True,
-                "message": "Cache refreshed successfully"
-            }
-        else:
-            logger.info(f"No changes detected for {payload.sheet_name}")
-            return {
-                "status": "success",
-                "sheet": payload.sheet_name,
-                "updated": False,
-                "message": "No changes detected"
-            }
-    
-    except Exception as e:
-        logger.error(f"Error processing webhook: {e}", exc_info=True)
-        # Return 200 to prevent retries for permanent errors
-        # But log the error for investigation
-        return {
-            "status": "error",
-            "message": str(e),
-            "sheet": payload.sheet_name
-        }
+# Note: Supabase doesn't need webhooks - data is always up-to-date in the database
 
 
 # ============================================================================

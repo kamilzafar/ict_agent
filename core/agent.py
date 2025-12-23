@@ -9,7 +9,7 @@ from datetime import datetime
 logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
-    from core.sheets_cache import GoogleSheetsCacheService
+    from core.supabase_service import SupabaseService
 
 from langchain_core.messages import BaseMessage, HumanMessage, AIMessage, SystemMessage, trim_messages
 from langchain_openai import ChatOpenAI
@@ -20,9 +20,20 @@ from langgraph.checkpoint.memory import MemorySaver
 
 from core.memory import LongTermMemory
 from tools.mcp_rag_tools import get_mcp_rag_tools
-from tools.sheets_tools import create_google_sheets_tools
+from tools.supabase_tools import create_supabase_tools
 from tools.template_tools import template_tools
 from core.context_injector import ContextInjector
+
+# LangChain caching
+try:
+    from langchain_community.cache import RedisCache
+    from langchain_core.caches import BaseCache
+    from langchain.globals import set_llm_cache
+    import redis
+    LANGCHAIN_CACHE_AVAILABLE = True
+except ImportError:
+    LANGCHAIN_CACHE_AVAILABLE = False
+    logger.warning("LangChain Redis cache not available. Install with: pip install langchain-redis redis")
 
 
 class AgentState(TypedDict):
@@ -42,7 +53,7 @@ class IntelligentChatAgent:
         temperature: float = 0.7,
         memory_db_path: str = "/app/memory_db",
         summarize_interval: int = 10,
-        sheets_cache_service: Optional[Any] = None
+        supabase_service: Optional[Any] = None
     ):
         """Initialize the agent.
         
@@ -51,15 +62,15 @@ class IntelligentChatAgent:
             temperature: Temperature for the LLM
             memory_db_path: Path to the memory database
             summarize_interval: Number of turns before summarizing
-            sheets_cache_service: Optional Google Sheets cache service instance
+            supabase_service: Optional SupabaseService instance
         """
         self.memory = LongTermMemory(persist_directory=memory_db_path)
         self.summarize_interval = summarize_interval
         
-        # Initialize context injector if cache service is provided
+        # Initialize context injector if Supabase service is provided
         self.context_injector = None
-        if sheets_cache_service:
-            self.context_injector = ContextInjector(sheets_cache_service)
+        if supabase_service:
+            self.context_injector = ContextInjector(supabase_service)
         
         # Load system prompt once at initialization (CACHING OPTIMIZATION)
         # This avoids reading from disk on every API call
@@ -73,11 +84,40 @@ class IntelligentChatAgent:
                 "Please set it in your .env file or environment variables."
             )
         
+        # Initialize LangChain Redis cache for LLM responses
+        llm_cache = None
+        if LANGCHAIN_CACHE_AVAILABLE:
+            try:
+                redis_host = os.getenv("REDIS_HOST", "localhost")
+                redis_port = int(os.getenv("REDIS_PORT", "6379"))
+                redis_password = os.getenv("REDIS_PASSWORD")
+                redis_db = int(os.getenv("REDIS_DB", "0"))
+                
+                redis_client = redis.Redis(
+                    host=redis_host,
+                    port=redis_port,
+                    password=redis_password,
+                    db=redis_db,
+                    decode_responses=True
+                )
+                
+                # Test connection
+                redis_client.ping()
+                
+                llm_cache = RedisCache(redis_client=redis_client)
+                # Set global cache for all LLMs (LangChain best practice)
+                set_llm_cache(llm_cache)
+                logger.info("✓ LangChain Redis cache initialized globally for LLM responses")
+            except Exception as cache_error:
+                logger.warning(f"Could not initialize LangChain cache: {cache_error}")
+                logger.warning("LLM will work without caching (slower but functional)")
+        
         try:
             self.llm = ChatOpenAI(
                 model=model_name,
                 temperature=temperature,
                 openai_api_key=api_key
+                # Cache is set globally via set_llm_cache() above
             )
         except Exception as e:
             raise RuntimeError(
@@ -85,13 +125,13 @@ class IntelligentChatAgent:
                 "Please check your OPENAI_API_KEY is valid and the model name is correct."
             ) from e
         
-        # Get available tools (MCP RAG tools + Google Sheets tools + Template tools)
-        self.mcp_rag_tools = get_mcp_rag_tools(sheets_cache_service)
-        self.sheets_tools = create_google_sheets_tools(sheets_cache_service) if sheets_cache_service else []
+        # Get available tools (MCP RAG tools + Supabase tools + Template tools)
+        self.mcp_rag_tools = get_mcp_rag_tools(None)  # MCP RAG doesn't need sheets
+        self.supabase_tools = create_supabase_tools(supabase_service) if supabase_service else []
         self.template_tools = template_tools  # Always available
 
         # Combine all tools
-        all_tools = self.mcp_rag_tools + self.sheets_tools + self.template_tools
+        all_tools = self.mcp_rag_tools + self.supabase_tools + self.template_tools
         
         # Bind tools to LLM if available
         if all_tools:
@@ -360,13 +400,13 @@ You help leads with course enrollment through WhatsApp conversations."""
             if self.mcp_rag_tools:
                 tool_descriptions.append("append_lead_to_rag_sheets - Save lead data to Leads sheet. Do NOT use to fetch links or course data.")
             
-            # Sheet tools (for fetching data)
-            if self.sheets_tools:
-                tool_descriptions.append("fetch_course_links - Get demo links, PDF links, or course page links from Course_Links sheet")
-                tool_descriptions.append("fetch_course_details - Get course information (fees, duration, dates, professor, locations) from Course_Details sheet")
-                tool_descriptions.append("fetch_faqs - Get FAQs from FAQs sheet")
-                tool_descriptions.append("fetch_professor_info - Get professor/trainer information from About_Profr sheet")
-                tool_descriptions.append("fetch_company_info - Get company information (contact, social media, locations) from Company_Info sheet")
+            # Supabase tools (for fetching data)
+            if self.supabase_tools:
+                tool_descriptions.append("fetch_course_links - Get demo links, PDF links, or course page links from database")
+                tool_descriptions.append("fetch_course_details - Get course information (fees, duration, dates, professor, locations) from database")
+                tool_descriptions.append("fetch_faqs - Get FAQs from database")
+                tool_descriptions.append("fetch_professor_info - Get professor/trainer information from database")
+                tool_descriptions.append("fetch_company_info - Get company information (contact, social media, locations) from database")
             
             if tool_descriptions:
                 tool_info = f"\n\n## AVAILABLE TOOLS:\n\nYou have access to the following tools:\n"
