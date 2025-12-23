@@ -19,7 +19,6 @@ from langgraph.prebuilt import ToolNode
 from langgraph.checkpoint.memory import MemorySaver
 
 from core.memory import LongTermMemory
-from tools.mcp_rag_tools import get_mcp_rag_tools
 from tools.supabase_tools import create_supabase_tools
 from tools.template_tools import template_tools
 from core.context_injector import ContextInjector
@@ -28,11 +27,17 @@ from core.context_injector import ContextInjector
 try:
     from langchain_community.cache import RedisCache
     from langchain_core.caches import BaseCache
-    from langchain.globals import set_llm_cache
     import redis
+    # Try both possible locations for set_llm_cache
+    try:
+        from langchain_core.globals import set_llm_cache
+    except ImportError:
+        # Fallback for older LangChain versions
+        from langchain.globals import set_llm_cache  # type: ignore
     LANGCHAIN_CACHE_AVAILABLE = True
 except ImportError:
     LANGCHAIN_CACHE_AVAILABLE = False
+    set_llm_cache = None  # type: ignore
     logger.warning("LangChain Redis cache not available. Install with: pip install langchain-redis redis")
 
 
@@ -106,8 +111,11 @@ class IntelligentChatAgent:
                 
                 llm_cache = RedisCache(redis_client=redis_client)
                 # Set global cache for all LLMs (LangChain best practice)
-                set_llm_cache(llm_cache)
-                logger.info("✓ LangChain Redis cache initialized globally for LLM responses")
+                if set_llm_cache is not None:
+                    set_llm_cache(llm_cache)
+                    logger.info("✓ LangChain Redis cache initialized globally for LLM responses")
+                else:
+                    logger.warning("set_llm_cache not available, cache will not be set globally")
             except Exception as cache_error:
                 logger.warning(f"Could not initialize LangChain cache: {cache_error}")
                 logger.warning("LLM will work without caching (slower but functional)")
@@ -125,13 +133,12 @@ class IntelligentChatAgent:
                 "Please check your OPENAI_API_KEY is valid and the model name is correct."
             ) from e
         
-        # Get available tools (MCP RAG tools + Supabase tools + Template tools)
-        self.mcp_rag_tools = get_mcp_rag_tools(None)  # MCP RAG doesn't need sheets
+        # Get available tools (Supabase tools + Template tools)
         self.supabase_tools = create_supabase_tools(supabase_service) if supabase_service else []
         self.template_tools = template_tools  # Always available
 
         # Combine all tools
-        all_tools = self.mcp_rag_tools + self.supabase_tools + self.template_tools
+        all_tools = self.supabase_tools + self.template_tools
         
         # Bind tools to LLM if available
         if all_tools:
@@ -397,9 +404,6 @@ You help leads with course enrollment through WhatsApp conversations."""
             tool_descriptions = []
             
             # MCP RAG tool (for saving data)
-            if self.mcp_rag_tools:
-                tool_descriptions.append("append_lead_to_rag_sheets - Save lead data to Leads sheet. Do NOT use to fetch links or course data.")
-            
             # Supabase tools (for fetching data)
             if self.supabase_tools:
                 tool_descriptions.append("fetch_course_links - Get demo links, PDF links, or course page links from database")
@@ -418,26 +422,6 @@ You help leads with course enrollment through WhatsApp conversations."""
                 tool_info += "- To GET FAQs → Use fetch_faqs\n"
                 tool_info += "- To GET professor info → Use fetch_professor_info\n"
                 tool_info += "- To GET company info → Use fetch_company_info\n"
-                tool_info += "- To SAVE lead data → Use append_lead_to_rag_sheets (only before sharing demo video link in Step 6)\n"
-                tool_info += "\nNEVER use append_lead_to_rag_sheets to fetch links or course data - it only saves data.\n"
-        
-        # Add Google Sheets context injection (proactive - no tool calls needed)
-        sheets_context = ""
-        if self.context_injector:
-            # Get current stage and selected course
-            current_stage = self.memory.get_stage(conversation_id)
-            lead_data = self.memory.get_lead_data(conversation_id)
-            selected_course = lead_data.get("selected_course")
-            
-            # Inject stage-based context
-            stage_context = self.context_injector.get_stage_context(
-                current_stage,
-                selected_course=selected_course
-            )
-            
-            if stage_context:
-                sheets_context = f"\n\n## RELEVANT GOOGLE SHEETS DATA (Pre-loaded for your reference):\n{stage_context}\n"
-                sheets_context += "NOTE: This data is automatically loaded from Google Sheets cache. You can use this information directly without calling any tools.\n"
         
         # Add conversation metadata
         context_info = f"""
@@ -448,7 +432,7 @@ You help leads with course enrollment through WhatsApp conversations."""
 """
         
         # Combine prompt (NO summary here - it's injected as context memory)
-        full_prompt = base_prompt + tool_info + context_info + sheets_context
+        full_prompt = base_prompt + tool_info + context_info
         
         return full_prompt
     
@@ -563,22 +547,18 @@ Summary:"""
         # Always work with the latest lead_data snapshot to avoid redundant writes
         lead_data_snapshot = self.memory.get_lead_data(conversation_id)
 
-        # Check for tool calls (especially append_lead_to_rag_sheets)
+        # Check for tool calls and extract lead data
         for message in messages:
             if hasattr(message, 'tool_calls') and message.tool_calls:
                 for tool_call in message.tool_calls:
-                    if tool_call.get('name') == 'append_lead_to_rag_sheets':
-                        # Extract lead data from tool call arguments
-                        args = tool_call.get('args', {})
+                    # Extract lead data from any tool call arguments if present
+                    args = tool_call.get('args', {})
 
-                        if args.get('name'):
-                            self.memory.update_lead_field(conversation_id, 'name', args['name'])
+                    if args.get('name'):
+                        self.memory.update_lead_field(conversation_id, 'name', args['name'])
 
-                        if args.get('phone'):
-                            self.memory.update_lead_field(conversation_id, 'phone', args['phone'])
-
-                        # Mark demo as shared when this tool is called
-                        self.memory.update_lead_field(conversation_id, 'demo_shared', True)
+                    if args.get('phone'):
+                        self.memory.update_lead_field(conversation_id, 'phone', args['phone'])
 
                         # Extract other data from notes or metadata
                         notes = args.get('notes', '')

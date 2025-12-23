@@ -40,6 +40,12 @@ class CompanyInfoInput(BaseModel):
     field: Optional[str] = Field(default=None, description="Specific field to fetch (e.g., 'contact_number', 'website') or None for all info")
 
 
+class SearchCoursesInput(BaseModel):
+    """Input schema for searching courses."""
+    search_term: str = Field(description="Search term to find courses by name or description")
+    limit: int = Field(default=10, description="Maximum number of courses to return")
+
+
 def create_supabase_tools(supabase_service) -> List:
     """Create all optimized Supabase database tools for the LangChain agent.
     
@@ -64,7 +70,6 @@ def create_supabase_tools(supabase_service) -> List:
         """Fetch course links from database. Use for demo links, PDF links, or course page links.
         
         Use this tool when you need to share any link with the user. Returns actual URLs.
-        Do NOT use append_lead_to_rag_sheets for links - that tool only saves data.
         
         Args:
             course_name: Course name (e.g., "CTA", "USA Taxation")
@@ -285,6 +290,50 @@ def create_supabase_tools(supabase_service) -> List:
             return f"Error fetching company info: {str(e)}"
     
     tools.append(fetch_company_info)
+    
+    # 6. Search Courses Tool (optimized)
+    @tool("search_courses", args_schema=SearchCoursesInput)
+    def search_courses(search_term: str, limit: int = 10) -> str:
+        """Search for courses by name or description.
+        
+        Use this to find courses when user asks about available courses or searches for specific topics.
+        
+        Args:
+            search_term: Search term (e.g., "tax", "accounting", "USA")
+            limit: Maximum number of results (default: 10)
+        
+        Returns:
+            List of matching courses with names and descriptions
+        """
+        try:
+            courses = supabase_service.search_courses(search_term, limit=limit)
+            
+            if not courses:
+                return f"No courses found matching '{search_term}'"
+            
+            formatted_courses = []
+            for i, course in enumerate(courses, 1):
+                parts = []
+                if course.get("course_name"):
+                    parts.append(f"Course: {course['course_name']}")
+                if course.get("course_description"):
+                    # Truncate long descriptions
+                    desc = course['course_description']
+                    if len(desc) > 200:
+                        desc = desc[:200] + "..."
+                    parts.append(f"Description: {desc}")
+                if parts:
+                    formatted_courses.append(f"{i}. " + " | ".join(parts))
+            
+            if formatted_courses:
+                return "\n\n".join(formatted_courses)
+            return f"No courses found matching '{search_term}'"
+        
+        except Exception as e:
+            logger.error(f"Error searching courses: {e}", exc_info=True)
+            return f"Error searching courses: {str(e)}"
+    
+    tools.append(search_courses)
     
     logger.info(f"Created {len(tools)} optimized Supabase tools")
     return tools

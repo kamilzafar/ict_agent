@@ -130,7 +130,7 @@ def get_message_template(
         Templates may contain placeholders like {name}, {course_name}, {Pdf_Link}.
         You must replace these with actual values when using the template.
 
-        Some templates require fetching data from Google Sheets FIRST:
+        Some templates require fetching data from Supabase FIRST:
         - VALIDATION_WITH_PDF: Fetch Pdf_Link using fetch_course_links
         - DEMO_VIDEO_SHARE: Fetch Demo_Link using fetch_course_links
         - FEE_INQUIRY: Fetch course details using fetch_course_details

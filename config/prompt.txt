@@ -102,9 +102,6 @@ Use fetch_professor_info tool with the professor name or course name
 FOR COMPANY INFORMATION LIKE ADDRESSES AND CONTACT NUMBERS:
 Use fetch_company_info tool with the field you need
 
-TO SAVE LEAD INFORMATION:
-Use append_lead_to_rag_sheets tool with the lead data
-
 FOR MESSAGE TEMPLATES:
 Use get_template tool with the template name
 
@@ -152,8 +149,7 @@ Your steps:
 1. Recognize UAE means UAE Taxation Course
 2. Call fetch_course_links("UAE Taxation Course")
 3. Get the Demo_Link from the response
-4. Call append_lead_to_rag_sheets with lead data (name, course, education, goal - whatever you have) ( you can write None if something is missing )
-5. Share the demo link
+4. Share the demo link
 
 User:“Demo bhejo UAE course ka”
 
@@ -284,10 +280,10 @@ Your Reponse:"
 
 EXAMPLE 9: SAVING LEAD DATA BEFORE DEMO
 
-When you are about to share a demo link, first save the lead data.
+When you are about to share a demo link, make sure you have collected the lead data in memory.
 
 Your steps:
-1. Call append_lead_to_rag_sheets with this data:
+1. Ensure lead data is tracked in memory:
    - Lead_Name: whatever name they gave (or "None" if not collected)
    - Selected_Course: the course they chose
    - Education_Level: what they told you (or "None")
@@ -322,7 +318,7 @@ Fee, duration, batch date, professor, mode, locations --> fetch_course_details(c
 Refund policy, certificate, any policy question --> fetch_faqs(keyword)
 Professor bio, qualifications, experience --> fetch_professor_info(course_name or professor_name)
 Campus address, contact numbers, company info --> fetch_company_info(field_name)
-Need to save lead info before demo --> append_lead_to_rag_sheets(lead_data)
+Need to track lead info before demo --> Lead data is automatically tracked in memory
 Need a message template --> get_template(template_name)
 
 ---
@@ -392,7 +388,7 @@ Ask if they want to watch a demo video.
 STEP 6: SHARE DEMO VIDEO
 If they say yes to demo, share the demo link.
 Fetch this from fetch_course_links tool.
-Before sharing demo link, save lead data using append_lead_to_rag_sheets tool.
+Before sharing demo link, ensure lead data is tracked in memory.
 Ask if they have any questions.
 
 STEP 7: ANSWER QUESTIONS
@@ -520,7 +516,7 @@ If they ignore the offer, dont keep asking.
 If they say no, respect that and move on.
 If they say yes, share the demo link.
 
-When you are about to share a demo video, save the lead data using append_lead_to_rag_sheets tool. Include whatever information you have collected: name, course interest, education, goal. If you dont have some information, thats okay, save what you have.
+When you are about to share a demo video, ensure lead data is tracked in memory. Include whatever information you have collected: name, course interest, education, goal. If you dont have some information, thats okay, track what you have.
 
 ---
 
@@ -656,7 +652,7 @@ If they say yes, then restart the conversation naturally. Ask their name again a
 
 ## SECTION 24: LEAD DATA CAPTURE
 
-When you are about to share a demo video link, save the lead data using append_lead_to_rag_sheets tool.
+When you are about to share a demo video link, ensure lead data is tracked in memory.
 
 Data to capture:
 - Lead_Name: from conversation

@@ -237,9 +237,6 @@ class LongTermMemory:
         
         # Save metadata (debounced - could be optimized further with async writes)
         self._save_metadata()
-        
-        # Clear cache for this conversation
-        self._clear_cache_for_conversation(conversation_id)
     
     def add_summary(self, conversation_id: str, summary: str, replace_old: bool = True):
         """Add or update a summary for a conversation.
@@ -287,9 +284,6 @@ class LongTermMemory:
         # Add new summary to vector store
         self.vectorstore.add_documents([summary_doc])
         self._save_metadata()
-        
-        # Clear cache for this conversation
-        self._clear_cache_for_conversation(conversation_id)
     
     def _clear_cache_for_conversation(self, conversation_id: str):
         """Clear cache entries for a specific conversation (thread-safe)."""
@@ -311,75 +305,79 @@ class LongTermMemory:
         query: str,
         k: int = 5,
         conversation_id: Optional[str] = None,
-        use_cache: bool = True
+        use_cache: bool = False
     ) -> List[Document]:
         """Search for relevant context from memory.
         
-        PRODUCTION OPTIMIZATION: Uses caching to avoid redundant searches.
-        Only searches summaries (not individual turns) for efficiency.
+        Direct API calls - no caching. Searches both ChromaDB summaries and conversation history.
         
         Args:
             query: Search query
             k: Number of results to return
             conversation_id: Optional conversation ID to filter by
-            use_cache: Whether to use cache (default: True)
+            use_cache: Deprecated - kept for compatibility, always False now
         
         Returns:
             List of relevant documents
         """
-        # Check cache first (thread-safe)
-        if use_cache:
-            cache_key = self._get_cache_key(query, k, conversation_id)
-            with self._cache_lock:
-                if cache_key in self._context_cache:
-                    results, timestamp = self._context_cache[cache_key]
-                    # Check if cache is still valid
-                    if (datetime.now().timestamp() - timestamp) < self._cache_ttl:
-                        return results
-                    else:
-                        # Cache expired, remove it
-                        self._context_cache.pop(cache_key, None)
+        results = []
         
-        # Build filter - prioritize summaries and filter by conversation if provided
-        where_filter = {"type": "summary"}  # Only search summaries for efficiency
-        if conversation_id:
-            where_filter["conversation_id"] = conversation_id
+        # 1. Search ChromaDB summaries (direct API call, no cache)
+        search_k = k * 3 if conversation_id else k * 2
         
-        # Search vector store (only searches summaries, not individual turns)
         try:
-            results = self.vectorstore.similarity_search(
-                query,
-                k=k * 2 if conversation_id else k,  # Get more results if filtering, then filter manually
-                filter=where_filter
-            )
-        except Exception as e:
-            # Fallback if filter doesn't work - search without filter then filter manually
-            logger.warning(f"ChromaDB filter failed, using manual filtering: {e}")
-            results = self.vectorstore.similarity_search(query, k=k * 3)
-        
-        # CRITICAL: Manually filter by conversation_id if provided
-        # This ensures we never return context from wrong conversations
-        if conversation_id:
-            filtered_results = []
-            for doc in results:
+            vector_results = self.vectorstore.similarity_search(query, k=search_k)
+            
+            # Filter by conversation_id and type
+            for doc in vector_results:
+                doc_type = doc.metadata.get("type")
                 doc_conv_id = doc.metadata.get("conversation_id")
-                # Only include documents from the current conversation
-                if doc_conv_id == conversation_id:
-                    filtered_results.append(doc)
-                # Stop once we have enough results
-                if len(filtered_results) >= k:
+                
+                # Only include summaries
+                if doc_type != "summary":
+                    continue
+                
+                # Filter by conversation_id if provided
+                if conversation_id and doc_conv_id != conversation_id:
+                    continue
+                
+                results.append(doc)
+                if len(results) >= k:
                     break
-            results = filtered_results
+        except Exception as e:
+            logger.warning(f"ChromaDB search failed: {e}")
         
-        # Cache results (thread-safe)
-        if use_cache:
-            cache_key = self._get_cache_key(query, k, conversation_id)
-            with self._cache_lock:
-                if len(self._context_cache) < self._max_cache_size:
-                    self._context_cache[cache_key] = (results, datetime.now().timestamp())
-                elif cache_key in self._context_cache:
-                    # Update existing entry even if cache is full
-                    self._context_cache[cache_key] = (results, datetime.now().timestamp())
+        # 2. If conversation_id provided and we don't have enough results,
+        # search conversation history (for conversations without summaries yet)
+        if conversation_id and len(results) < k:
+            try:
+                # Get conversation history directly
+                history = self.get_conversation_history(conversation_id)
+                
+                # Simple text matching in conversation history
+                query_lower = query.lower()
+                for turn in history:
+                    user_msg = turn.get("user_message", "").lower()
+                    assistant_msg = turn.get("assistant_message", "").lower()
+                    
+                    # Check if query matches in this turn
+                    if query_lower in user_msg or query_lower in assistant_msg:
+                        # Create a Document from the conversation turn
+                        turn_text = f"User: {turn.get('user_message', '')}\nAssistant: {turn.get('assistant_message', '')}"
+                        doc = Document(
+                            page_content=turn_text,
+                            metadata={
+                                "conversation_id": conversation_id,
+                                "timestamp": turn.get("timestamp", ""),
+                                "type": "conversation_turn"
+                            }
+                        )
+                        results.append(doc)
+                        
+                        if len(results) >= k:
+                            break
+            except Exception as e:
+                logger.warning(f"Error searching conversation history: {e}")
         
         return results
     

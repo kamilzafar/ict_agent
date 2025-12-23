@@ -1,6 +1,7 @@
 -- Supabase Database Schema for ICT Agent
 -- Create these tables manually in your Supabase project
 -- All queries are optimized for <10ms performance with proper indexes
+-- All column types are TEXT for consistency
 
 -- ============================================================================
 -- Enable Trigram Extension (for fuzzy text search) - Run this first
@@ -17,16 +18,16 @@ CREATE TABLE IF NOT EXISTS course_details (
   course_start_date_or_last_enrollment_date TEXT,
   professor_name TEXT,
   course_duration TEXT,
-  course_fee_physical NUMERIC(12,2),
-  course_fee_online NUMERIC(12,2),
-  course_fee_hibernate NUMERIC(12,2),
+  course_fee_physical TEXT,
+  course_fee_online TEXT,
+  course_fee_hibernate TEXT,
   enrollment_status TEXT,
   mode_of_courses TEXT,
-  online_available BOOLEAN,
-  physical_available BOOLEAN,
-  location_islamabad BOOLEAN,
-  location_karachi BOOLEAN,
-  location_lahore BOOLEAN
+  online_available TEXT,
+  physical_available TEXT,
+  location_islamabad TEXT,
+  location_karachi TEXT,
+  location_lahore TEXT
 );
 
 -- Indexes for fast course name lookups (optimized for <10ms)
@@ -68,7 +69,7 @@ CREATE TABLE IF NOT EXISTS about_professor (
   full_name TEXT,
   display_name_for_students TEXT,
   qualifications TEXT,
-  total_years_of_experience INTEGER,
+  total_years_of_experience TEXT,
   specializations TEXT,
   courses_currently_teaching TEXT,
   course_in_which_city TEXT,
@@ -105,15 +106,15 @@ CREATE TABLE IF NOT EXISTS leads (
   why_they_want_course TEXT,
   label TEXT,
   status TEXT,
-  timestamp TIMESTAMP,
-  have_sent_demo_link BOOLEAN,
-  have_done_the_call BOOLEAN
+  timestamp TEXT,
+  have_sent_demo_link TEXT,
+  have_done_the_call TEXT
 );
 
 -- Indexes for fast lookups (optimized for <10ms)
 CREATE INDEX IF NOT EXISTS idx_leads_phone_number ON leads (phone_number);
 CREATE INDEX IF NOT EXISTS idx_leads_course_selected ON leads USING gin (course_selected gin_trgm_ops);
-CREATE INDEX IF NOT EXISTS idx_leads_timestamp ON leads (timestamp DESC);
+CREATE INDEX IF NOT EXISTS idx_leads_timestamp ON leads (timestamp);
 
 -- ============================================================================
 -- Row Level Security (RLS) - Optional
@@ -133,4 +134,3 @@ CREATE INDEX IF NOT EXISTS idx_leads_timestamp ON leads (timestamp DESC);
 -- CREATE POLICY "Allow public read access" ON about_professor FOR SELECT USING (true);
 -- CREATE POLICY "Allow public read access" ON company_info FOR SELECT USING (true);
 -- CREATE POLICY "Allow insert for leads" ON leads FOR INSERT WITH CHECK (true);
-

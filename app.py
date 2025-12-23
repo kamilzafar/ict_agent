@@ -360,7 +360,6 @@ class HealthResponse(BaseModel):
     status: str
     agent_initialized: bool
     memory_db_path: str
-    sheets_cache_initialized: bool = False
     redis_connected: bool = False
     version: str = "1.0.0"
 
@@ -474,7 +473,6 @@ async def health_check():
         status="healthy" if agent is not None else "degraded",
         agent_initialized=agent is not None,
         memory_db_path=os.getenv("MEMORY_DB_PATH", "./memory_db"),
-        sheets_cache_initialized=supabase_service is not None,  # Reusing field name for compatibility
         redis_connected=supabase_connected,  # Reusing field name for compatibility
         version="1.0.0"
     )
