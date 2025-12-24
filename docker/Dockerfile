@@ -68,8 +68,8 @@ COPY static/ ./static/
 COPY docker/entrypoint.sh /entrypoint.sh
 
 # Create necessary directories first with proper permissions
-RUN mkdir -p /app/memory_db /app/sheets_index_db /app/logs /app/credentials /app/static && \
-    chmod 755 /app/memory_db /app/sheets_index_db /app/logs /app/credentials /app/static && \
+RUN mkdir -p /app/memory_db /app/logs /app/static && \
+    chmod 755 /app/memory_db /app/logs /app/static && \
     chmod +x /entrypoint.sh
 
 # Create cache directory for uv with proper permissions
@@ -80,7 +80,7 @@ RUN mkdir -p /home/appuser/.cache/uv && \
 # Mount them at runtime (e.g., docker-compose volume) to /app/credentials/google-sheets-service-account.json
 # Set ownership and permissions for app directories and entrypoint
 RUN chown -R appuser:appuser /app /entrypoint.sh && \
-    chmod -R 755 /app/memory_db /app/sheets_index_db /app/logs
+    chmod -R 755 /app/memory_db /app/logs
 
 # Set environment variables
 ENV PYTHONUNBUFFERED=1 \

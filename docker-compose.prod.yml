@@ -35,18 +35,12 @@ services:
     env_file:
       - .env
     environment:
-      - CHROMA_DB_PATH=/app/sheets_index_db
       - MEMORY_DB_PATH=/app/memory_db
       - ENVIRONMENT=production
-      # Google Sheets OAuth2 Configuration (optional - app works without it)
-      - GOOGLE_SHEETS_CLIENT_ID=${GOOGLE_SHEETS_CLIENT_ID:-}
-      - GOOGLE_SHEETS_CLIENT_SECRET=${GOOGLE_SHEETS_CLIENT_SECRET:-}
-      - GOOGLE_SHEETS_REFRESH_TOKEN=${GOOGLE_SHEETS_REFRESH_TOKEN:-}
-      # Google Sheets Service Account Configuration (alternative to OAuth2)
-      - GOOGLE_SHEETS_CREDENTIALS_PATH=${GOOGLE_SHEETS_CREDENTIALS_PATH:-}
-      # Google Sheets Spreadsheet Configuration
-      - GOOGLE_SHEETS_SPREADSHEET_ID=${GOOGLE_SHEETS_SPREADSHEET_ID:-}
-      - GOOGLE_SHEETS_SHEET_NAMES=${GOOGLE_SHEETS_SHEET_NAMES:-}
+      # Supabase Configuration
+      - SUPABASE_URL=${SUPABASE_URL:-}
+      - SUPABASE_KEY=${SUPABASE_KEY:-}
+      - SUPABASE_REALTIME_ENABLED=${SUPABASE_REALTIME_ENABLED:-true}
     
     # Resource limits to prevent OOM kills during ChromaDB indexing
     deploy:
@@ -61,16 +55,12 @@ services:
     volumes:
       # Persist memory database (bind mount for easy backup/access)
       - ./memory_db:/app/memory_db
-      # Persist ChromaDB index (for Google Sheets semantic search)
-      - ./sheets_index_db:/app/sheets_index_db
       # Mount config for hot-reload (template editor)
       - ./config:/app/config
       # Mount static files for admin UI
       - ./static:/app/static:ro
       # Optional: Mount logs directory for debugging
       - ./logs:/app/logs
-      # Optional: Mount credentials if using service account (uncomment if needed)
-      # - ./credentials:/app/credentials:ro
     
     # Redis is optional - remove depends_on if not using Redis
     # depends_on:
@@ -80,13 +70,12 @@ services:
     restart: unless-stopped
     
     # Health check
-    # Increased start_period to allow time for ChromaDB indexing of large sheets
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8009/health"]
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 120s  # 2 minutes to allow indexing of large sheets (e.g., FAQs with 323 rows)
+      start_period: 40s
     
     # Logging configuration
     logging:
