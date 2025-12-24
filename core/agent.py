@@ -417,28 +417,28 @@ You help leads with course enrollment through WhatsApp conversations."""
             
             # Supabase tools (for fetching data)
             if self.supabase_tools:
-                tool_descriptions.append("fetch_course_links - Get demo links, PDF links, or course page links from database")
-                tool_descriptions.append("fetch_course_details - Get course information (fees, duration, dates, professor, locations) from database")
-                tool_descriptions.append("fetch_faqs - Get FAQs from database")
-                tool_descriptions.append("fetch_professor_info - Get professor/trainer information from database")
-                tool_descriptions.append("fetch_company_info - Get company information (contact, social media, locations) from database")
+                tool_descriptions.append("fetch_course_links - always use this tool to Get demo links, PDF links, or course page links from database")
+                tool_descriptions.append("fetch_course_details - always use this tool to Get course information (fees, duration, dates, professor, locations) from database")
+                tool_descriptions.append("fetch_faqs - always use this tool to Get FAQs from database")
+                tool_descriptions.append("fetch_professor_info - always use this tool to Get professor/trainer information from database")
+                tool_descriptions.append("fetch_company_info - always use this tool to Get company information (contact, social media, locations) from database")
             
             # Google Sheets tools (for saving lead data)
             if self.sheets_tools:
-                tool_descriptions.append("append_lead_data - Save lead data to Google Sheets (MANDATORY before sharing demo link)")
+                tool_descriptions.append("append_lead_data - always use this tool to Save lead data to Google Sheets (MANDATORY before sharing demo link)")
             
             if tool_descriptions:
                 tool_info = f"\n\n## AVAILABLE TOOLS:\n\nYou have access to the following tools:\n"
                 for desc in tool_descriptions:
                     tool_info += f"- {desc}\n"
                 tool_info += "\nIMPORTANT TOOL USAGE RULES:\n"
-                tool_info += "- To GET links (demo, PDF, course page) → Use fetch_course_links\n"
-                tool_info += "- To GET course information → Use fetch_course_details\n"
-                tool_info += "- To GET FAQs → Use fetch_faqs\n"
-                tool_info += "- To GET professor info → Use fetch_professor_info\n"
-                tool_info += "- To GET company info → Use fetch_company_info\n"
+                tool_info += "- Always use this tool To GET links (demo, PDF, course page) → Use fetch_course_links\n"
+                tool_info += "- Always use this tool To GET course information → Use fetch_course_details\n"
+                tool_info += "- Always use this tool To GET FAQs → Use fetch_faqs\n"
+                tool_info += "- Always use this tool To GET professor info → Use fetch_professor_info\n"
+                tool_info += "- Always use this tool To GET company info → Use fetch_company_info\n"
                 if self.sheets_tools:
-                    tool_info += "- To SAVE lead data (before demo link) → Use append_lead_data (MANDATORY)\n"
+                    tool_info += "- Always use this tool To SAVE lead data (before demo link) → Use append_lead_data (MANDATORY)\n"
         
         # Add conversation metadata
         context_info = f"""

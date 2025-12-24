@@ -67,7 +67,7 @@ def create_supabase_tools(supabase_service) -> List:
     # 1. Course Links Tool (optimized)
     @tool("fetch_course_links", args_schema=CourseLinksInput)
     def fetch_course_links(course_name: str, link_type: Optional[str] = None) -> str:
-        """Fetch course links from database. Use for demo links, PDF links, or course page links.
+        """Always use this tool to Fetch course links from database. Use for demo links, PDF links, or course page links.
         
         Use this tool when you need to share any link with the user. Returns actual URLs.
         
@@ -114,7 +114,7 @@ def create_supabase_tools(supabase_service) -> List:
     # 2. Course Details Tool (optimized)
     @tool("fetch_course_details", args_schema=CourseDetailsInput)
     def fetch_course_details(course_name: str, field: Optional[str] = None) -> str:
-        """Fetch course information from database.
+        """Always use this tools to Fetch course information from database.
         
         Returns fees, duration, dates, professor, locations, enrollment status, benefits, description.
         
@@ -158,7 +158,7 @@ def create_supabase_tools(supabase_service) -> List:
     # 3. FAQs Tool (optimized)
     @tool("fetch_faqs", args_schema=FAQsInput)
     def fetch_faqs(query: Optional[str] = None, course_name: Optional[str] = None, top_k: int = 5) -> str:
-        """Fetch FAQs from database. Uses optimized search if query provided, otherwise returns top FAQs.
+        """Always use this tools to Fetch FAQs from database. Uses optimized search if query provided, otherwise returns top FAQs.
         
         Args:
             query: Optional search query
@@ -199,7 +199,7 @@ def create_supabase_tools(supabase_service) -> List:
     # 4. Professor Tool (optimized)
     @tool("fetch_professor_info", args_schema=ProfessorInput)
     def fetch_professor_info(professor_name: Optional[str] = None, course_name: Optional[str] = None) -> str:
-        """Fetch professor/trainer information from database.
+        """Always use this tool to Fetch professor/trainer information from database.
         
         Returns name, qualifications, experience, specializations, courses, certifications, bio.
         
@@ -252,7 +252,7 @@ def create_supabase_tools(supabase_service) -> List:
     # 5. Company Info Tool (optimized)
     @tool("fetch_company_info", args_schema=CompanyInfoInput)
     def fetch_company_info(field: Optional[str] = None) -> str:
-        """Fetch company information from database.
+        """Always use this tool to Fetch company information from database.
         
         Company info is stored as key-value pairs. Returns contact numbers, emails, social media, website, locations, hours, statistics.
         
@@ -294,7 +294,7 @@ def create_supabase_tools(supabase_service) -> List:
     # 6. Search Courses Tool (optimized)
     @tool("search_courses", args_schema=SearchCoursesInput)
     def search_courses(search_term: str, limit: int = 10) -> str:
-        """Search for courses by name or description.
+        """Always use this tool to Search for courses by name or description.
         
         Use this to find courses when user asks about available courses or searches for specific topics.
         
