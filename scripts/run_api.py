@@ -97,7 +97,6 @@ if __name__ == "__main__":
             server_header=False,  # Security: Don't expose server version
             # Production optimizations
             limit_max_requests=1000 if is_production else None,  # Restart workers after N requests (prevents memory leaks)
-            limit_max_requests_jitter=50 if is_production else None,  # Jitter to prevent thundering herd
         )
     except OSError as e:
         if "10048" in str(e) or "address already in use" in str(e).lower():
