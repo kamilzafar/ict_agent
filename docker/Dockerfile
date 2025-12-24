@@ -34,12 +34,14 @@ RUN uv sync --frozen --no-dev
 FROM python:3.13-slim AS runtime
 
 # Install minimal runtime dependencies
-# ChromaDB and other libraries may need these at runtime
+# ChromaDB, SQLite, and other libraries may need these at runtime
 # gosu is needed for clean user switching in entrypoint
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     ca-certificates \
     gosu \
+    sqlite3 \
+    libsqlite3-dev \
     && rm -rf /var/lib/apt/lists/* \
     && apt-get clean
 
@@ -68,27 +70,35 @@ COPY static/ ./static/
 COPY docker/entrypoint.sh /entrypoint.sh
 
 # Create necessary directories first with proper permissions
-RUN mkdir -p /app/memory_db /app/logs /app/static && \
-    chmod 755 /app/memory_db /app/logs /app/static && \
-    chmod +x /entrypoint.sh
+# memory_db contains: ChromaDB data, SQLite checkpoints.db, JSON metadata
+RUN mkdir -p /app/memory_db /app/logs /app/static /app/credentials && \
+    chmod 755 /app/memory_db /app/logs /app/static /app/credentials && \
+    chmod +x /entrypoint.sh && \
+    # Ensure SQLite can write to memory_db
+    chmod 777 /app/memory_db
 
 # Create cache directory for uv with proper permissions
 RUN mkdir -p /home/appuser/.cache/uv && \
     chown -R appuser:appuser /home/appuser
 
-# Credentials are not baked into the image for security.
-# Mount them at runtime (e.g., docker-compose volume) to /app/credentials/google-sheets-service-account.json
 # Set ownership and permissions for app directories and entrypoint
 RUN chown -R appuser:appuser /app /entrypoint.sh && \
     chmod -R 755 /app/memory_db /app/logs
 
-# Set environment variables
+# Set environment variables for production
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     ENVIRONMENT=production \
     PATH="/app/.venv/bin:$PATH" \
     PYTHONPATH="/app" \
-    UV_CACHE_DIR=/home/appuser/.cache/uv
+    UV_CACHE_DIR=/home/appuser/.cache/uv \
+    WORKERS=4 \
+    MAX_CONCURRENT=100 \
+    KEEP_ALIVE=120 \
+    TIMEOUT=120 \
+    BACKLOG=2048 \
+    LOG_LEVEL=info \
+    SUMMARIZE_INTERVAL=10
 
 # Keep as root for entrypoint to fix permissions on mounted volumes
 # Entrypoint will switch to appuser after fixing permissions

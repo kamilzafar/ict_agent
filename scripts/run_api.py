@@ -77,14 +77,17 @@ if __name__ == "__main__":
         backlog = int(os.getenv("BACKLOG", "2048"))  # Socket backlog
         
         logger.info(f"Starting server with {workers} worker(s), max_concurrent={max_concurrent}")
+        logger.info(f"Production mode: {is_production}")
+        logger.info(f"Environment: {os.getenv('ENVIRONMENT', 'development')}")
         
+        # Production-optimized uvicorn configuration
         uvicorn.run(
             "app:app",
             host=host,
             port=port,
             reload=not is_production and os.getenv("API_RELOAD", "false").lower() == "true",
             log_level=os.getenv("LOG_LEVEL", "info").lower(),
-            workers=workers,
+            workers=workers if is_production else 1,  # Single worker in dev for debugging
             access_log=not is_production,  # Disable access logs in production for performance
             loop=loop_type,
             limit_concurrency=max_concurrent,  # Max concurrent connections
@@ -92,6 +95,9 @@ if __name__ == "__main__":
             timeout_graceful_shutdown=timeout,  # Graceful shutdown timeout (2 minutes)
             backlog=backlog,  # Socket backlog for better connection handling
             server_header=False,  # Security: Don't expose server version
+            # Production optimizations
+            limit_max_requests=1000 if is_production else None,  # Restart workers after N requests (prevents memory leaks)
+            limit_max_requests_jitter=50 if is_production else None,  # Jitter to prevent thundering herd
         )
     except OSError as e:
         if "10048" in str(e) or "address already in use" in str(e).lower():

@@ -1,29 +1,4 @@
 services:
-  # Redis is optional - app will work without it (uses in-memory cache)
-  # To use Redis, start with: docker compose --profile with-redis up
-  redis:
-    image: redis:7-alpine
-    container_name: ict_agent_redis
-    ports:
-      - "${REDIS_PORT:-6379}:6379"
-    # For local: no password by default. Set REDIS_PASSWORD in .env for production
-    # Note: If REDIS_PASSWORD is set, you'll need to update the command manually or use an entrypoint script
-    command: redis-server --appendonly yes --maxmemory 512mb --maxmemory-policy allkeys-lru
-    environment:
-      - REDIS_PASSWORD=${REDIS_PASSWORD:-}
-    volumes:
-      - redis_data:/data
-    restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-    networks:
-      - ict_agent_network
-    profiles:
-      - with-redis  # Only start Redis if explicitly requested: docker compose --profile with-redis up
-
   api:
     build: 
       context: .
@@ -37,10 +12,25 @@ services:
     environment:
       - MEMORY_DB_PATH=/app/memory_db
       - ENVIRONMENT=production
+      # FastAPI Production Settings
+      - WORKERS=${WORKERS:-4}
+      - MAX_CONCURRENT=${MAX_CONCURRENT:-100}
+      - KEEP_ALIVE=${KEEP_ALIVE:-120}
+      - TIMEOUT=${TIMEOUT:-120}
+      - BACKLOG=${BACKLOG:-2048}
+      - LOG_LEVEL=${LOG_LEVEL:-info}
       # Supabase Configuration
       - SUPABASE_URL=${SUPABASE_URL:-}
       - SUPABASE_KEY=${SUPABASE_KEY:-}
       - SUPABASE_REALTIME_ENABLED=${SUPABASE_REALTIME_ENABLED:-true}
+      # Google Sheets Configuration (optional)
+      - GOOGLE_SHEETS_CREDENTIALS_PATH=${GOOGLE_SHEETS_CREDENTIALS_PATH:-}
+      - GOOGLE_SHEETS_SPREADSHEET_ID=${GOOGLE_SHEETS_SPREADSHEET_ID:-}
+      - GOOGLE_SHEETS_LEADS_SHEET_NAME=${GOOGLE_SHEETS_LEADS_SHEET_NAME:-Leads}
+      # LangChain/LangGraph Settings
+      - SUMMARIZE_INTERVAL=${SUMMARIZE_INTERVAL:-10}
+      - MODEL_NAME=${MODEL_NAME:-gpt-4.1-mini}
+      - TEMPERATURE=${TEMPERATURE:-0.7}
     
     # Resource limits to prevent OOM kills during ChromaDB indexing
     deploy:
@@ -54,6 +44,7 @@ services:
     
     volumes:
       # Persist memory database (bind mount for easy backup/access)
+      # Contains: ChromaDB, SQLite checkpoints.db, conversations_metadata.json
       - ./memory_db:/app/memory_db
       # Mount config for hot-reload (template editor)
       - ./config:/app/config
@@ -61,21 +52,21 @@ services:
       - ./static:/app/static:ro
       # Optional: Mount logs directory for debugging
       - ./logs:/app/logs
-    
-    # Redis is optional - remove depends_on if not using Redis
-    # depends_on:
-    #   redis:
-    #     condition: service_healthy
+      # Google Sheets credentials (optional - only if using Google Sheets)
+      # Mount your service account JSON file to /app/credentials/google-sheets-service-account.json
+      # Then set GOOGLE_SHEETS_CREDENTIALS_PATH=/app/credentials/google-sheets-service-account.json
+      - ./credentials:/app/credentials:ro
     
     restart: unless-stopped
+    # Note: User switching is handled by entrypoint.sh for proper volume permissions
     
-    # Health check
+    # Health check with proper timeouts for production
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8009/health"]
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 40s
+      start_period: 60s  # Increased for LangChain/LangGraph initialization
     
     # Logging configuration
     logging:
@@ -86,10 +77,6 @@ services:
     
     networks:
       - ict_agent_network
-
-volumes:
-  redis_data:
-    driver: local
 
 networks:
   ict_agent_network:

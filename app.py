@@ -28,14 +28,30 @@ load_dotenv()
 
 # Configure logging with production-ready settings
 log_level = os.getenv("LOG_LEVEL", "INFO").upper()
+is_production = os.getenv("ENVIRONMENT", "development").lower() == "production"
+
+# Production logging format (more concise)
+if is_production:
+    log_format = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+else:
+    log_format = "%(asctime)s - %(name)s - %(levelname)s - [%(filename)s:%(lineno)d] - %(message)s"
+
 logging.basicConfig(
     level=getattr(logging, log_level, logging.INFO),
-    format="%(asctime)s - %(name)s - %(levelname)s - [%(filename)s:%(lineno)d] - %(message)s",
+    format=log_format,
     handlers=[
         logging.StreamHandler(sys.stdout),
-    ]
+    ],
+    force=True  # Override any existing configuration
 )
 logger = logging.getLogger(__name__)
+
+# Set log levels for noisy libraries in production
+if is_production:
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+    logging.getLogger("httpcore").setLevel(logging.WARNING)
+    logging.getLogger("urllib3").setLevel(logging.WARNING)
+    logging.getLogger("chromadb").setLevel(logging.WARNING)
 
 # Global agent instance
 agent: Optional[IntelligentChatAgent] = None
@@ -156,9 +172,14 @@ async def lifespan(app: FastAPI):
             summarize_interval=int(os.getenv("SUMMARIZE_INTERVAL", "10")),
             supabase_service=supabase_service
         )
-        logger.info("Agent initialized successfully")
-        logger.info(f"Model: {os.getenv('MODEL_NAME', 'gpt-4.1-mini')}")
-        logger.info(f"Memory DB: {os.getenv('MEMORY_DB_PATH', '/app/memory_db')}")
+        logger.info("✓ Agent initialized successfully")
+        logger.info(f"  Model: {os.getenv('MODEL_NAME', 'gpt-4.1-mini')}")
+        logger.info(f"  Memory DB: {os.getenv('MEMORY_DB_PATH', '/app/memory_db')}")
+        logger.info(f"  Supabase: {'✓ Enabled' if supabase_service else '✗ Disabled'}")
+        
+        # Log tool availability
+        sheets_configured = bool(os.getenv("GOOGLE_SHEETS_CREDENTIALS_PATH") and os.getenv("GOOGLE_SHEETS_SPREADSHEET_ID"))
+        logger.info(f"  Google Sheets: {'✓ Configured' if sheets_configured else '✗ Not configured'}")
     except ValueError as e:
         logger.error(f"Configuration error: {e}")
         raise
@@ -190,7 +211,6 @@ async def lifespan(app: FastAPI):
 
 # In-memory session storage (no expiration)
 # Sessions persist until logout or server restart
-# For production with multiple workers, consider using Redis
 admin_sessions: set = set()  # session_id set (no expiration)
 
 
@@ -360,7 +380,7 @@ class HealthResponse(BaseModel):
     status: str
     agent_initialized: bool
     memory_db_path: str
-    redis_connected: bool = False
+    supabase_connected: bool = False
     version: str = "1.0.0"
 
 
@@ -421,8 +441,8 @@ async def debug_supabase():
             "supabase_url": os.getenv("SUPABASE_URL", "Not set"),
             "connection": "ok",
             "test_query": "successful",
-            "cache_enabled": True,
-            "realtime_enabled": os.getenv("SUPABASE_REALTIME_ENABLED", "true").lower() == "true"
+            "cache_enabled": False,
+            "note": "Caching disabled - all queries go directly to database"
         }
     except Exception as e:
         return {
@@ -435,13 +455,13 @@ async def debug_supabase():
 
 @app.post("/admin/cache/clear", tags=["Admin"], dependencies=[Depends(verify_api_key)])
 async def clear_cache(table: Optional[str] = None):
-    """Clear Supabase cache for instant updates after data changes.
+    """Clear cache endpoint - kept for API compatibility.
     
-    Use this endpoint after updating data in Supabase to see changes immediately.
-    Note: If Realtime is enabled, cache clears automatically (no need to call this).
+    Note: Caching is disabled - all queries go directly to the database.
+    This endpoint is a no-op but kept for backward compatibility.
     
     Args:
-        table: Optional table name (e.g., "course_links"), or None to clear all
+        table: Optional table name (ignored - no cache to clear)
     """
     if not supabase_service:
         raise HTTPException(
@@ -452,14 +472,14 @@ async def clear_cache(table: Optional[str] = None):
     supabase_service.clear_cache(table)
     return {
         "status": "success",
-        "message": f"Cache cleared for {table or 'all tables'}",
-        "note": "Next query will fetch fresh data from Supabase"
+        "message": "Cache clear requested (caching is disabled - all queries are direct DB calls)",
+        "note": "No cache exists - all queries already go directly to Supabase database"
     }
 
 
 @app.get("/health", tags=["Health"], response_model=HealthResponse)
 async def health_check():
-    """Health check endpoint with comprehensive status."""
+    """Health check endpoint with comprehensive production status."""
     supabase_connected = False
     if supabase_service:
         try:
@@ -469,11 +489,35 @@ async def health_check():
         except Exception:
             supabase_connected = False
     
+    # Check if agent has tools available
+    tools_available = False
+    checkpointer_ok = False
+    memory_db_ok = False
+    
+    if agent:
+        try:
+            tools_available = len(agent.all_tools) > 0
+            # Check checkpointer status
+            checkpointer_ok = hasattr(agent, 'checkpointer') and agent.checkpointer is not None
+            # Check memory database accessibility
+            memory_db_path = os.getenv("MEMORY_DB_PATH", "/app/memory_db")
+            memory_db_ok = os.path.exists(memory_db_path) and os.access(memory_db_path, os.W_OK)
+        except Exception:
+            pass
+    
+    # Determine overall health status
+    if agent is not None and tools_available and checkpointer_ok and memory_db_ok:
+        status = "healthy"
+    elif agent is not None:
+        status = "degraded"
+    else:
+        status = "unhealthy"
+    
     return HealthResponse(
-        status="healthy" if agent is not None else "degraded",
+        status=status,
         agent_initialized=agent is not None,
-        memory_db_path=os.getenv("MEMORY_DB_PATH", "./memory_db"),
-        redis_connected=supabase_connected,  # Reusing field name for compatibility
+        memory_db_path=os.getenv("MEMORY_DB_PATH", "/app/memory_db"),
+        supabase_connected=supabase_connected,
         version="1.0.0"
     )
 

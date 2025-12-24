@@ -16,29 +16,21 @@ from langchain_openai import ChatOpenAI
 from langgraph.graph import StateGraph, END
 from langgraph.graph.message import add_messages
 from langgraph.prebuilt import ToolNode
-from langgraph.checkpoint.memory import MemorySaver
+try:
+    from langgraph.checkpoint.sqlite import SqliteSaver
+    SQLITE_CHECKPOINTER_AVAILABLE = True
+except ImportError:
+    SQLITE_CHECKPOINTER_AVAILABLE = False
+    from langgraph.checkpoint.memory import MemorySaver
+    logger.warning("SQLite checkpointer not available. Install with: pip install langgraph-checkpoint-sqlite")
 
 from core.memory import LongTermMemory
 from tools.supabase_tools import create_supabase_tools
+from tools.sheets_tools import create_sheets_tools
 from tools.template_tools import template_tools
 from core.context_injector import ContextInjector
 
-# LangChain caching
-try:
-    from langchain_community.cache import RedisCache
-    from langchain_core.caches import BaseCache
-    import redis
-    # Try both possible locations for set_llm_cache
-    try:
-        from langchain_core.globals import set_llm_cache
-    except ImportError:
-        # Fallback for older LangChain versions
-        from langchain.globals import set_llm_cache  # type: ignore
-    LANGCHAIN_CACHE_AVAILABLE = True
-except ImportError:
-    LANGCHAIN_CACHE_AVAILABLE = False
-    set_llm_cache = None  # type: ignore
-    logger.warning("LangChain Redis cache not available. Install with: pip install langchain-redis redis")
+# Cache removed - all calls go directly to database/API
 
 
 class AgentState(TypedDict):
@@ -89,43 +81,12 @@ class IntelligentChatAgent:
                 "Please set it in your .env file or environment variables."
             )
         
-        # Initialize LangChain Redis cache for LLM responses
-        llm_cache = None
-        if LANGCHAIN_CACHE_AVAILABLE:
-            try:
-                redis_host = os.getenv("REDIS_HOST", "localhost")
-                redis_port = int(os.getenv("REDIS_PORT", "6379"))
-                redis_password = os.getenv("REDIS_PASSWORD")
-                redis_db = int(os.getenv("REDIS_DB", "0"))
-                
-                redis_client = redis.Redis(
-                    host=redis_host,
-                    port=redis_port,
-                    password=redis_password,
-                    db=redis_db,
-                    decode_responses=True
-                )
-                
-                # Test connection
-                redis_client.ping()
-                
-                llm_cache = RedisCache(redis_client=redis_client)
-                # Set global cache for all LLMs (LangChain best practice)
-                if set_llm_cache is not None:
-                    set_llm_cache(llm_cache)
-                    logger.info("✓ LangChain Redis cache initialized globally for LLM responses")
-                else:
-                    logger.warning("set_llm_cache not available, cache will not be set globally")
-            except Exception as cache_error:
-                logger.warning(f"Could not initialize LangChain cache: {cache_error}")
-                logger.warning("LLM will work without caching (slower but functional)")
-        
+        # No caching - all LLM calls go directly to OpenAI API
         try:
             self.llm = ChatOpenAI(
                 model=model_name,
                 temperature=temperature,
                 openai_api_key=api_key
-                # Cache is set globally via set_llm_cache() above
             )
         except Exception as e:
             raise RuntimeError(
@@ -133,12 +94,32 @@ class IntelligentChatAgent:
                 "Please check your OPENAI_API_KEY is valid and the model name is correct."
             ) from e
         
-        # Get available tools (Supabase tools + Template tools)
-        self.supabase_tools = create_supabase_tools(supabase_service) if supabase_service else []
-        self.template_tools = template_tools  # Always available
+        # Get available tools (Supabase tools + Sheets tools + Template tools)
+        # All tool creation functions are production-safe (return empty list on failure)
+        try:
+            self.supabase_tools = create_supabase_tools(supabase_service) if supabase_service else []
+            logger.debug(f"Created {len(self.supabase_tools)} Supabase tools")
+        except Exception as e:
+            logger.warning(f"Error creating Supabase tools: {e}")
+            self.supabase_tools = []
+        
+        try:
+            self.sheets_tools = create_sheets_tools()  # Google Sheets tools for lead data
+            logger.debug(f"Created {len(self.sheets_tools)} Google Sheets tools")
+        except Exception as e:
+            logger.warning(f"Error creating Google Sheets tools: {e}")
+            self.sheets_tools = []
+        
+        try:
+            self.template_tools = template_tools  # Always available
+            logger.debug(f"Created {len(self.template_tools)} template tools")
+        except Exception as e:
+            logger.warning(f"Error loading template tools: {e}")
+            self.template_tools = []
 
         # Combine all tools
-        all_tools = self.supabase_tools + self.template_tools
+        all_tools = self.supabase_tools + self.sheets_tools + self.template_tools
+        logger.info(f"✓ Total tools available: {len(all_tools)} (Supabase: {len(self.supabase_tools)}, Sheets: {len(self.sheets_tools)}, Templates: {len(self.template_tools)})")
         
         # Bind tools to LLM if available
         if all_tools:
@@ -152,8 +133,39 @@ class IntelligentChatAgent:
         # Create the graph
         self.graph = self._create_graph()
         
-        # Compile the graph with memory
-        self.checkpointer = MemorySaver()
+        # Compile the graph with persistent checkpointer
+        # Use SQLite for production persistence, fallback to MemorySaver if not available
+        try:
+            if SQLITE_CHECKPOINTER_AVAILABLE:
+                checkpoint_db = os.path.join(memory_db_path, "checkpoints.db")
+                os.makedirs(memory_db_path, exist_ok=True)
+                
+                # Ensure directory is writable (critical for Docker)
+                if not os.access(memory_db_path, os.W_OK):
+                    logger.warning(f"Memory DB path not writable: {memory_db_path}")
+                    try:
+                        os.chmod(memory_db_path, 0o777)
+                    except Exception as perm_error:
+                        logger.error(f"Cannot fix permissions: {perm_error}")
+                
+                self.checkpointer = SqliteSaver.from_conn_string(f"sqlite:///{checkpoint_db}")
+                logger.info(f"✓ SQLite checkpointer initialized: {checkpoint_db}")
+                
+                # Test checkpointer by creating a test checkpoint
+                try:
+                    test_config = {"configurable": {"thread_id": "__test__"}}
+                    self.checkpointer.put(test_config, {}, {})
+                    logger.debug("Checkpointer write test successful")
+                except Exception as test_error:
+                    logger.warning(f"Checkpointer write test failed: {test_error}")
+            else:
+                self.checkpointer = MemorySaver()
+                logger.warning("Using in-memory checkpointer (not persistent). Install langgraph-checkpoint-sqlite for persistence.")
+        except Exception as e:
+            logger.error(f"Error initializing checkpointer: {e}", exc_info=True)
+            logger.warning("Falling back to in-memory checkpointer")
+            self.checkpointer = MemorySaver()
+        
         self.app = self.graph.compile(checkpointer=self.checkpointer)
     
     def _load_system_prompt(self) -> str:
@@ -403,7 +415,6 @@ You help leads with course enrollment through WhatsApp conversations."""
         if self.all_tools:
             tool_descriptions = []
             
-            # MCP RAG tool (for saving data)
             # Supabase tools (for fetching data)
             if self.supabase_tools:
                 tool_descriptions.append("fetch_course_links - Get demo links, PDF links, or course page links from database")
@@ -411,6 +422,10 @@ You help leads with course enrollment through WhatsApp conversations."""
                 tool_descriptions.append("fetch_faqs - Get FAQs from database")
                 tool_descriptions.append("fetch_professor_info - Get professor/trainer information from database")
                 tool_descriptions.append("fetch_company_info - Get company information (contact, social media, locations) from database")
+            
+            # Google Sheets tools (for saving lead data)
+            if self.sheets_tools:
+                tool_descriptions.append("append_lead_data - Save lead data to Google Sheets (MANDATORY before sharing demo link)")
             
             if tool_descriptions:
                 tool_info = f"\n\n## AVAILABLE TOOLS:\n\nYou have access to the following tools:\n"
@@ -422,6 +437,8 @@ You help leads with course enrollment through WhatsApp conversations."""
                 tool_info += "- To GET FAQs → Use fetch_faqs\n"
                 tool_info += "- To GET professor info → Use fetch_professor_info\n"
                 tool_info += "- To GET company info → Use fetch_company_info\n"
+                if self.sheets_tools:
+                    tool_info += "- To SAVE lead data (before demo link) → Use append_lead_data (MANDATORY)\n"
         
         # Add conversation metadata
         context_info = f"""
@@ -734,7 +751,15 @@ Summary:"""
         # 2. Merge new messages with existing messages (using add_messages reducer)
         # 3. The _retrieve_context node (entry point) will run and populate context
         # 4. The agent node will receive all context (summary + recent messages from checkpointer)
-        final_state = self.app.invoke(initial_state, config)
+        try:
+            final_state = self.app.invoke(initial_state, config)
+        except Exception as e:
+            logger.error(f"Error running graph for conversation {conversation_id}: {e}", exc_info=True)
+            # Fallback: Ensure conversation history exists in LongTermMemory
+            all_history = self.memory.get_conversation_history(conversation_id)
+            if all_history:
+                logger.warning("Graph execution failed, but conversation history exists in LongTermMemory")
+            raise RuntimeError(f"Failed to process message: {str(e)}") from e
         
         # Extract assistant response
         assistant_messages = [

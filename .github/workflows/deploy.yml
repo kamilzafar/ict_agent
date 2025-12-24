@@ -47,8 +47,12 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          # Cache dependencies but rebuild code layers when files change
+          # Docker automatically invalidates cache when COPY source files change
           cache-from: type=registry,ref=${{ env.DOCKER_IMAGE }}:buildcache
           cache-to: type=registry,ref=${{ env.DOCKER_IMAGE }}:buildcache,mode=max
+          # Ensure we always get the latest base images
+          pull: true
 
   deploy:
     name: Deploy to Hostinger VPS
@@ -67,25 +71,52 @@ jobs:
           key: ${{ secrets.VPS_SSH_KEY }}
           port: ${{ secrets.VPS_PORT || '22' }}
           script: |
+            set -e  # Exit on error
+            
             # Navigate to application directory
             cd ~/agent || cd /root/agent || exit 1
             
+            echo "=== Ensuring data directories exist ==="
             # Ensure data directories exist with proper permissions
-            mkdir -p memory_db sheets_index_db logs
-            chmod -R 755 memory_db sheets_index_db logs || true
+            # memory_db needs 777 for SQLite checkpoints.db writes
+            mkdir -p memory_db logs credentials
+            chmod -R 777 memory_db || true
+            chmod -R 755 logs || true
+            chmod -R 644 credentials || true
             
-            # Pull the latest Docker image
-            docker pull ${{ env.DOCKER_IMAGE }}:${{ env.DOCKER_TAG }}
+            echo "=== Pulling latest Docker image ==="
+            # Pull the latest Docker image (force pull to ensure latest)
+            docker pull ${{ env.DOCKER_IMAGE }}:${{ env.DOCKER_TAG }} || {
+              echo "Warning: Failed to pull image, will use existing or build"
+            }
             
+            echo "=== Stopping old containers ==="
             # Stop and remove old containers
-            docker compose down || true
+            docker compose -f docker-compose.prod.yml down || true
             
-            # Start containers with new image
-            docker compose up -d
+            echo "=== Pulling latest images for compose ==="
+            # Pull latest images for compose (ensures we have the latest)
+            docker compose -f docker-compose.prod.yml pull || true
             
-            # Clean up old/unused images
-            docker image prune -f
+            echo "=== Starting containers with new image ==="
+            # Start containers with new image (force recreate to ensure latest code)
+            docker compose -f docker-compose.prod.yml up -d --force-recreate
             
+            echo "=== Waiting for service to be healthy ==="
+            # Wait a bit for health checks
+            sleep 15
+            
+            echo "=== Container status ==="
             # Show running containers
-            docker compose ps
+            docker compose -f docker-compose.prod.yml ps
+            
+            echo "=== Recent logs ==="
+            # Show recent logs to verify deployment
+            docker compose -f docker-compose.prod.yml logs --tail=30 || true
+            
+            echo "=== Cleaning up old images ==="
+            # Clean up old/unused images (keep last 24h)
+            docker image prune -f --filter "until=24h" || true
+            
+            echo "=== Deployment complete ==="
 

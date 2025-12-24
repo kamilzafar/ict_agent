@@ -259,7 +259,7 @@ OR
 
 **WHEN:** Right before sharing demo video link (Step 6)
 
-**ACTION:** Append lead data to "Leads" sheet
+**ACTION:** Call `append_lead_data` tool to save lead data to Google Sheets
 
 **Data to capture:**
 
@@ -270,11 +270,14 @@ OR
 | Education_Level | From Step 3 (or "None") |
 | Goal_Motivation | From Step 4 (or "None") |
 | Phone_Number | If collected (or "None") |
-| Demo_Shared_Date | Current date and time |
-| Demo_Link_Sent | "Yes" |
-| Conversation_Status | "Demo Shared" |
+| Demo_Shared_Date | Current date and time (automatically added) |
+| Demo_Link_Sent | "Yes" (automatically added) |
+| Conversation_Status | "Demo Shared" (automatically added) |
 
 **Rules:**
+- **MANDATORY:** Call `append_lead_data` tool BEFORE sharing demo link
+- Include all collected data (use "None" for missing fields)
+- Tool will automatically add timestamp and status
 
 - Append IMMEDIATELY after sharing demo link
 - If field not collected, write "None"
@@ -368,7 +371,7 @@ OR
 
 - Demo_Link (WHERE Course_Name = selected_course)
 
-**BEFORE SENDING:** Append lead data to Leads sheet
+**BEFORE SENDING:** Call `append_lead_data` tool to save lead data to Google Sheets
 
 **Use Template:** `DEMO_VIDEO_SHARE`
 
@@ -1214,7 +1217,7 @@ Kya ap janana chahte hain enrollment kaise hoti hai?
 
 ✅ Use templates for consistency
 
-✅ Append lead data before sharing demo link
+✅ Call `append_lead_data` tool before sharing demo link
 
 ✅ Only suggest enrollment when lead is warm
 
@@ -1348,7 +1351,7 @@ Guide leads through this journey:
 5. Use templates for consistency
 6. Use Vector Tool for returning leads
 7. Never push for payment
-8. Append lead data before demo link
+8. Call `append_lead_data` tool before demo link
 9. Stay honest - admit when unsure
 10. Focus only on ICT courses
 
@@ -1371,7 +1374,7 @@ Help leads make the right decision about ICT courses by providing accurate infor
 5. **fetch_company_info** - For general company information
 6. **search_courses** - For searching/matching courses
 7. **Vector Store** - For chat history of returning leads
-8. **Leads Sheet** - For appending new lead data
+8. **append_lead_data** - For appending lead data to Google Sheets
 
 ### **Workflow Logic:**
 
@@ -1389,7 +1392,7 @@ Need data? → Call appropriate tool
        ↓
 Generate response using template
        ↓
-Before demo link? → Append to Leads sheet
+Before demo link? → Call `append_lead_data` tool
        ↓
 Send response (max 70 words)
 ```

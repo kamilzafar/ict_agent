@@ -5,7 +5,6 @@ import logging
 from typing import List, Dict, Any, Optional
 from datetime import datetime
 import json
-from functools import lru_cache
 import hashlib
 
 logger = logging.getLogger(__name__)
@@ -46,12 +45,18 @@ class LongTermMemory:
                 "Please check your OPENAI_API_KEY is valid."
             ) from e
         
-        # Initialize vector store
-        self.vectorstore = Chroma(
-            persist_directory=persist_directory,
-            collection_name=collection_name,
-            embedding_function=self.embeddings
-        )
+        # Initialize vector store with persistence
+        # ChromaDB persists to disk automatically when persist_directory is set
+        try:
+            self.vectorstore = Chroma(
+                persist_directory=persist_directory,
+                collection_name=collection_name,
+                embedding_function=self.embeddings
+            )
+            logger.info(f"✓ ChromaDB initialized: {persist_directory}/{collection_name}")
+        except Exception as e:
+            logger.error(f"Failed to initialize ChromaDB: {e}", exc_info=True)
+            raise RuntimeError(f"Failed to initialize ChromaDB vector store: {str(e)}") from e
         
         # Text splitter for chunking conversations
         self.text_splitter = RecursiveCharacterTextSplitter(
@@ -63,16 +68,12 @@ class LongTermMemory:
         # Store conversation metadata
         self.metadata_file = os.path.join(persist_directory, "conversations_metadata.json")
         self.conversations_metadata = self._load_metadata()
+        logger.info(f"✓ Loaded {len(self.conversations_metadata)} conversations from metadata file")
+        logger.debug(f"Metadata file: {self.metadata_file}")
         
         # Thread-safety locks
         self._metadata_lock = threading.Lock()  # For metadata operations
-        self._cache_lock = threading.Lock()  # For cache operations
         self._file_lock = threading.Lock()  # For file I/O operations
-        
-        # Cache for context retrieval (TTL-based, max 100 entries)
-        self._context_cache: Dict[str, tuple] = {}  # query_hash -> (results, timestamp)
-        self._cache_ttl = 300  # 5 minutes cache TTL
-        self._max_cache_size = 100
         
         # Production settings
         self.max_turns_in_metadata = 100  # Only keep last 100 turns in metadata to prevent bloat
@@ -285,37 +286,20 @@ class LongTermMemory:
         self.vectorstore.add_documents([summary_doc])
         self._save_metadata()
     
-    def _clear_cache_for_conversation(self, conversation_id: str):
-        """Clear cache entries for a specific conversation (thread-safe)."""
-        with self._cache_lock:
-            keys_to_remove = [
-                key for key in self._context_cache.keys()
-                if conversation_id in str(key)
-            ]
-            for key in keys_to_remove:
-                self._context_cache.pop(key, None)
-    
-    def _get_cache_key(self, query: str, k: int, conversation_id: Optional[str]) -> str:
-        """Generate cache key for a search query."""
-        cache_str = f"{query}:{k}:{conversation_id or 'all'}"
-        return hashlib.md5(cache_str.encode()).hexdigest()
-    
     def search_relevant_context(
         self,
         query: str,
         k: int = 5,
-        conversation_id: Optional[str] = None,
-        use_cache: bool = False
+        conversation_id: Optional[str] = None
     ) -> List[Document]:
         """Search for relevant context from memory.
         
-        Direct API calls - no caching. Searches both ChromaDB summaries and conversation history.
+        Direct database calls - no caching. Searches both ChromaDB summaries and conversation history.
         
         Args:
             query: Search query
             k: Number of results to return
             conversation_id: Optional conversation ID to filter by
-            use_cache: Deprecated - kept for compatibility, always False now
         
         Returns:
             List of relevant documents
