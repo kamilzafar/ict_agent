@@ -63,12 +63,14 @@ COPY --from=builder /build/.venv /app/.venv
 
 # Copy application code
 # Order matters: copy static files first, then code that changes frequently
+# Config files (prompt.txt) are copied separately to ensure changes always trigger rebuild
 COPY app.py ./
 COPY core/ ./core/
 COPY tools/ ./tools/
-COPY config/ ./config/
 COPY scripts/ ./scripts/
 COPY static/ ./static/
+# Copy config last to ensure prompt.txt and other config changes always invalidate cache
+COPY config/ ./config/
 
 # Copy and set up entrypoint script (before switching users)
 COPY docker/entrypoint.sh /entrypoint.sh

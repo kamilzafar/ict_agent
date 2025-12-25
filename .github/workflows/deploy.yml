@@ -108,6 +108,8 @@ jobs:
             echo "=== Ensuring data directories exist ==="
             # Ensure data directories exist with proper permissions
             # memory_db needs 777 for SQLite checkpoints.db writes
+            # Note: config/ is NOT created here - config files come from Docker image
+            # This ensures prompt.txt and other config files are always up-to-date
             mkdir -p memory_db logs credentials
             chmod -R 777 memory_db || true
             chmod -R 755 logs || true

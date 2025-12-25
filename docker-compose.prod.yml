@@ -47,8 +47,8 @@ services:
       # Persist memory database (bind mount for easy backup/access)
       # Contains: ChromaDB, SQLite checkpoints.db, conversations_metadata.json
       - ./memory_db:/app/memory_db
-      # Mount config for hot-reload (template editor)
-      - ./config:/app/config
+      # Config files come from Docker image (updated with each deployment)
+      # Removed volume mount to ensure prompt.txt and other config files are always up-to-date
       # Mount static files for admin UI
       - ./static:/app/static:ro
       # Optional: Mount logs directory for debugging
