@@ -36,7 +36,7 @@ jobs:
           images: ${{ env.DOCKER_IMAGE }}
           tags: |
             type=raw,value=${{ env.DOCKER_TAG }}
-            type=sha,prefix={{branch}}-
+            type=sha,prefix={{branch}}-,format=short
             type=raw,value=latest
 
       - name: Build and push Docker image
@@ -53,6 +53,12 @@ jobs:
           cache-to: type=registry,ref=${{ env.DOCKER_IMAGE }}:buildcache,mode=max
           # Ensure we always get the latest base images
           pull: true
+          # Build arguments to ensure fresh build with commit info
+          build-args: |
+            BUILD_DATE=${{ github.run_started_at }}
+            GIT_COMMIT=${{ github.sha }}
+          # Ensure code changes trigger rebuild
+          # Docker will automatically invalidate cache when COPY source files change
 
   deploy:
     name: Deploy to Hostinger VPS
@@ -73,8 +79,22 @@ jobs:
           script: |
             set -e  # Exit on error
             
+            IMAGE_NAME="${{ env.DOCKER_IMAGE }}"
+            IMAGE_TAG="${{ env.DOCKER_TAG }}"
+            FULL_IMAGE="${IMAGE_NAME}:${IMAGE_TAG}"
+            
+            echo "=== Deployment Configuration ==="
+            echo "Image: ${FULL_IMAGE}"
+            echo "Timestamp: $(date)"
+            
             # Navigate to application directory
             cd ~/agent || cd /root/agent || exit 1
+            
+            echo "=== Verifying docker-compose.yml exists ==="
+            if [ ! -f "docker-compose.prod.yml" ]; then
+              echo "ERROR: docker-compose.prod.yml not found!"
+              exit 1
+            fi
             
             echo "=== Ensuring data directories exist ==="
             # Ensure data directories exist with proper permissions
@@ -84,39 +104,95 @@ jobs:
             chmod -R 755 logs || true
             chmod -R 644 credentials || true
             
+            echo "=== Stopping old containers ==="
+            # Stop and remove old containers (don't remove volumes to preserve data)
+            docker compose -f docker-compose.prod.yml down || true
+            
+            echo "=== Removing old image to force fresh pull ==="
+            # Remove old image to ensure we pull the latest
+            docker rmi ${FULL_IMAGE} 2>/dev/null || echo "Image not found locally, will pull fresh"
+            
             echo "=== Pulling latest Docker image ==="
-            # Pull the latest Docker image (force pull to ensure latest)
-            docker pull ${{ env.DOCKER_IMAGE }}:${{ env.DOCKER_TAG }} || {
-              echo "Warning: Failed to pull image, will use existing or build"
+            # Pull the latest Docker image (force pull, no cache)
+            docker pull ${FULL_IMAGE} --quiet || {
+              echo "ERROR: Failed to pull image ${FULL_IMAGE}"
+              exit 1
             }
             
-            echo "=== Stopping old containers ==="
-            # Stop and remove old containers
-            docker compose -f docker-compose.prod.yml down || true
+            echo "=== Verifying image was pulled ==="
+            # Verify the image exists
+            if ! docker image inspect ${FULL_IMAGE} > /dev/null 2>&1; then
+              echo "ERROR: Image ${FULL_IMAGE} not found after pull!"
+              exit 1
+            fi
+            
+            # Show image details
+            echo "Image details:"
+            docker image inspect ${FULL_IMAGE} --format='{{.Id}} {{.Created}}' || true
             
             echo "=== Pulling latest images for compose ==="
             # Pull latest images for compose (ensures we have the latest)
-            docker compose -f docker-compose.prod.yml pull || true
+            docker compose -f docker-compose.prod.yml pull --quiet || {
+              echo "Warning: docker compose pull failed, but continuing..."
+            }
             
             echo "=== Starting containers with new image ==="
             # Start containers with new image (force recreate to ensure latest code)
-            docker compose -f docker-compose.prod.yml up -d --force-recreate
+            # Remove old containers first to ensure clean start
+            docker compose -f docker-compose.prod.yml up -d --force-recreate --remove-orphans || {
+              echo "ERROR: Failed to start containers"
+              exit 1
+            }
             
             echo "=== Waiting for service to be healthy ==="
-            # Wait a bit for health checks
-            sleep 15
+            # Wait for containers to start
+            sleep 10
+            
+            # Check if containers are running
+            if ! docker compose -f docker-compose.prod.yml ps | grep -q "Up"; then
+              echo "WARNING: Containers may not be running properly"
+            fi
             
             echo "=== Container status ==="
-            # Show running containers
+            # Show running containers with image info
             docker compose -f docker-compose.prod.yml ps
+            
+            echo "=== Verifying running container uses latest image ==="
+            # Get the image ID of the pulled image
+            PULLED_IMAGE_ID=$(docker image inspect ${FULL_IMAGE} --format='{{.Id}}' 2>/dev/null || echo "")
+            
+            if [ -n "$PULLED_IMAGE_ID" ]; then
+              echo "Pulled image ID: ${PULLED_IMAGE_ID}"
+              echo "Image created: $(docker image inspect ${FULL_IMAGE} --format='{{.Created}}' 2>/dev/null || echo 'unknown')"
+            fi
+            
+            # Verify container is using the correct image
+            CONTAINER_IMAGE=$(docker compose -f docker-compose.prod.yml ps --format '{{.Image}}' 2>/dev/null | head -n 1 || echo "")
+            if [ -n "$CONTAINER_IMAGE" ]; then
+              echo "Container image: ${CONTAINER_IMAGE}"
+              if [ "$CONTAINER_IMAGE" = "${FULL_IMAGE}" ]; then
+                echo "✓ Container is using the correct image"
+              else
+                echo "⚠ Container image may differ from expected"
+              fi
+            fi
             
             echo "=== Recent logs ==="
             # Show recent logs to verify deployment
-            docker compose -f docker-compose.prod.yml logs --tail=30 || true
+            docker compose -f docker-compose.prod.yml logs --tail=50 || true
+            
+            echo "=== Health check ==="
+            # Try to hit the health endpoint
+            sleep 5
+            if command -v curl > /dev/null; then
+              curl -f http://localhost:8009/health > /dev/null 2>&1 && echo "✓ Health check passed" || echo "⚠ Health check failed (service may still be starting)"
+            fi
             
             echo "=== Cleaning up old images ==="
             # Clean up old/unused images (keep last 24h)
             docker image prune -f --filter "until=24h" || true
             
             echo "=== Deployment complete ==="
+            echo "Deployed image: ${FULL_IMAGE}"
+            echo "Deployment time: $(date)"
 
