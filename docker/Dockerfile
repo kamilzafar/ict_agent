@@ -36,14 +36,18 @@ FROM python:3.13-slim AS runtime
 # Install minimal runtime dependencies
 # ChromaDB, SQLite, and other libraries may need these at runtime
 # gosu is needed for clean user switching in entrypoint
+# locales is needed for UTF-8 support for multilingual content
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     ca-certificates \
     gosu \
     sqlite3 \
     libsqlite3-dev \
+    locales \
     && rm -rf /var/lib/apt/lists/* \
-    && apt-get clean
+    && apt-get clean \
+    && sed -i '/en_US.UTF-8/s/^# //g' /etc/locale.gen \
+    && locale-gen en_US.UTF-8
 
 # Create non-root user for security
 RUN groupadd -r appuser && useradd -r -g appuser -m -d /home/appuser appuser
@@ -86,6 +90,7 @@ RUN chown -R appuser:appuser /app /entrypoint.sh && \
     chmod -R 755 /app/memory_db /app/logs
 
 # Set environment variables for production
+# UTF-8 locale settings for multilingual content support (Urdu, English, etc.)
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     ENVIRONMENT=production \
@@ -98,7 +103,10 @@ ENV PYTHONUNBUFFERED=1 \
     TIMEOUT=120 \
     BACKLOG=2048 \
     LOG_LEVEL=info \
-    SUMMARIZE_INTERVAL=10
+    SUMMARIZE_INTERVAL=10 \
+    LANG=en_US.UTF-8 \
+    LC_ALL=en_US.UTF-8 \
+    PYTHONIOENCODING=utf-8
 
 # Keep as root for entrypoint to fix permissions on mounted volumes
 # Entrypoint will switch to appuser after fixing permissions

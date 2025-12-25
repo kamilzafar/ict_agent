@@ -16,9 +16,12 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, HTMLResponse
 from fastapi.security import APIKeyHeader
 from fastapi.staticfiles import StaticFiles
+from fastapi.exceptions import RequestValidationError
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 from pydantic import BaseModel, Field, field_validator
 from dotenv import load_dotenv
+import json
+import re
 
 from core.agent import IntelligentChatAgent
 from core.supabase_service import SupabaseService
@@ -256,12 +259,13 @@ def verify_admin_session(admin_session: Optional[str] = Cookie(None)):
 root_path = os.getenv("ROOT_PATH", "")
 app = FastAPI(
     title="Intelligent Chat Agent API",
-    description="Production-ready API for interacting with an AI agent with long-term memory and vector database search",
+    description="Production-ready API for interacting with an AI agent with long-term memory and vector database search. Supports multilingual content (Urdu, English, etc.) with UTF-8 encoding.",
     version="1.0.0",
     lifespan=lifespan,
     root_path=root_path,  # For nginx proxy with subpath
     docs_url="/docs",  # Always enable docs
     redoc_url="/redoc",  # Always enable redoc
+    default_response_class=JSONResponse,  # Ensure UTF-8 JSON responses
 )
 
 # Configure Trusted Host middleware for proxy security
@@ -283,6 +287,61 @@ app.add_middleware(
     allow_headers=["*"],
     expose_headers=["*"],
 )
+
+# Middleware to fix JSON formatting issues (especially trailing quotes in multilingual content)
+@app.middleware("http")
+async def fix_json_middleware(request: Request, call_next):
+    """Fix common JSON formatting issues, especially trailing quotes in multilingual content."""
+    if request.method == "POST" and request.url.path == "/chat":
+        try:
+            body_bytes = await request.body()
+            if body_bytes:
+                try:
+                    body_str = body_bytes.decode('utf-8')
+                    
+                    # Try to parse JSON first
+                    try:
+                        json.loads(body_str)
+                        # JSON is valid, proceed normally
+                    except json.JSONDecodeError as json_err:
+                        # JSON is invalid, try to fix trailing quotes issue
+                        # Pattern: "message": "text"" -> "message": "text"
+                        # This fixes the specific issue: trailing "" before comma
+                        logger.warning(f"Invalid JSON detected, attempting to fix: {json_err.msg} at position {json_err.pos}")
+                        fixed_body = body_str
+                        
+                        # Fix trailing double quotes: "" before comma, newline, or closing brace
+                        # This handles: "message": "text"" -> "message": "text"
+                        # Pattern matches: "" followed by optional whitespace and comma/newline/brace
+                        fixed_body = re.sub(r'("")(\s*[,\n}])', r'\2', fixed_body)
+                        
+                        # Also handle cases where quotes might be escaped differently
+                        # Fix: \"\" before comma/newline/brace
+                        fixed_body = re.sub(r'(\\"\\")(\s*[,\n}])', r'\2', fixed_body)
+                        
+                        # Try parsing again
+                        try:
+                            json.loads(fixed_body)
+                            logger.info("Fixed JSON formatting issue: removed trailing quotes")
+                            # Reconstruct request with fixed body
+                            async def receive():
+                                return {"type": "http.request", "body": fixed_body.encode('utf-8')}
+                            request._receive = receive
+                        except json.JSONDecodeError:
+                            # Still invalid, proceed with original body (exception handler will catch it)
+                            async def receive():
+                                return {"type": "http.request", "body": body_bytes}
+                            request._receive = receive
+                except UnicodeDecodeError:
+                    # Encoding issue, proceed with original body
+                    async def receive():
+                        return {"type": "http.request", "body": body_bytes}
+                    request._receive = receive
+        except Exception as e:
+            logger.error(f"Error in JSON fix middleware: {e}")
+    
+    response = await call_next(request)
+    return response
 
 # Mount static files for admin UI
 static_dir = os.path.join(os.path.dirname(__file__), "static")
@@ -315,6 +374,34 @@ async def serve_admin_ui():
         )
 
 
+# Exception handler for JSON decode errors and validation errors
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    """Handle JSON decode errors and request validation errors."""
+    # Try to get request body for better error messages
+    body = None
+    try:
+        body_bytes = await request.body()
+        if body_bytes:
+            try:
+                body = body_bytes.decode('utf-8')
+                logger.error(f"JSON validation error - Body length: {len(body)}")
+                logger.error(f"Body preview: {body[:300]}")
+            except UnicodeDecodeError:
+                logger.error("Unicode decode error in request body")
+    except Exception:
+        pass
+    
+    return JSONResponse(
+        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+        content={
+            "detail": exc.errors(),
+            "message": "Invalid JSON format. Please ensure your request body is valid JSON with proper UTF-8 encoding for multilingual content."
+        },
+        media_type="application/json; charset=utf-8"
+    )
+
+
 # Global exception handler
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception):
@@ -322,7 +409,8 @@ async def global_exception_handler(request: Request, exc: Exception):
     logger.error(f"Unhandled exception: {exc}", exc_info=True)
     return JSONResponse(
         status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-        content={"detail": "An internal server error occurred"}
+        content={"detail": "An internal server error occurred"},
+        media_type="application/json; charset=utf-8"
     )
 
 
@@ -526,11 +614,13 @@ async def health_check():
 async def chat(request: ChatRequest):
     """Send a message to the agent and get a response.
     
+    Supports multilingual content (Urdu, English, etc.) with UTF-8 encoding.
+    
     Args:
         request: Chat request containing message and optional conversation_id
     
     Returns:
-        ChatResponse with agent's response and metadata
+        ChatResponse with agent's response and metadata (UTF-8 encoded)
     
     Raises:
         HTTPException: If agent is not initialized or error occurs
@@ -544,8 +634,9 @@ async def chat(request: ChatRequest):
     
     try:
         logger.info(f"Processing chat request - conversation_id: {request.conversation_id}")
+        logger.debug(f"Message preview: {request.message[:100]}...")
         
-        # Process the message
+        # Process the message (agent handles multilingual content automatically)
         result = agent.chat(
             user_input=request.message,
             conversation_id=request.conversation_id
@@ -553,7 +644,8 @@ async def chat(request: ChatRequest):
         
         logger.info(f"Chat request completed - conversation_id: {result['conversation_id']}, turn: {result['turn_count']}")
         
-        return ChatResponse(
+        # Return response with explicit UTF-8 encoding
+        response_data = ChatResponse(
             response=result["response"],
             conversation_id=result["conversation_id"],
             turn_count=result["turn_count"],
@@ -561,6 +653,11 @@ async def chat(request: ChatRequest):
             stage=result.get("stage", "NEW"),
             lead_data=result.get("lead_data", {}),
             timestamp=datetime.now().isoformat()
+        )
+        
+        return JSONResponse(
+            content=response_data.model_dump(),
+            media_type="application/json; charset=utf-8"
         )
     
     except ValueError as e:
