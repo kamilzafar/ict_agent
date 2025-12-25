@@ -1,7 +1,5 @@
 services:
   api:
-    # Use pre-built image from Docker Hub (no build on VPS)
-    # Image is built and pushed by GitHub Actions workflow
     # The deployment script will pull the latest image before starting
     # Supports DOCKER_IMAGE_TAG environment variable for SHA-tagged deployments
     image: ${DOCKER_IMAGE_TAG:-kamilzafar/ict_agent:latest}
