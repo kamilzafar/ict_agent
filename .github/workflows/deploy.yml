@@ -80,11 +80,20 @@ jobs:
             set -e  # Exit on error
             
             IMAGE_NAME="${{ env.DOCKER_IMAGE }}"
-            IMAGE_TAG="${{ env.DOCKER_TAG }}"
-            FULL_IMAGE="${IMAGE_NAME}:${IMAGE_TAG}"
+            BRANCH_NAME="${{ github.ref_name }}"
+            COMMIT_SHA="${{ github.sha }}"
+            SHORT_SHA="${COMMIT_SHA:0:7}"
+            
+            # Use SHA tag for more reliable deployments (avoids 'latest' tag caching issues)
+            SHA_TAG="${BRANCH_NAME}-${SHORT_SHA}"
+            FULL_IMAGE="${IMAGE_NAME}:${SHA_TAG}"
+            LATEST_IMAGE="${IMAGE_NAME}:latest"
             
             echo "=== Deployment Configuration ==="
-            echo "Image: ${FULL_IMAGE}"
+            echo "Primary image (SHA tag): ${FULL_IMAGE}"
+            echo "Fallback image (latest): ${LATEST_IMAGE}"
+            echo "Commit: ${COMMIT_SHA}"
+            echo "Branch: ${BRANCH_NAME}"
             echo "Timestamp: $(date)"
             
             # Navigate to application directory
@@ -108,38 +117,60 @@ jobs:
             # Stop and remove old containers (don't remove volumes to preserve data)
             docker compose -f docker-compose.prod.yml down || true
             
-            echo "=== Removing old image to force fresh pull ==="
-            # Remove old image to ensure we pull the latest
-            docker rmi ${FULL_IMAGE} 2>/dev/null || echo "Image not found locally, will pull fresh"
+            echo "=== Aggressively removing old images to force fresh pull ==="
+            # Remove all versions of the image to ensure Docker pulls fresh
+            # This prevents Docker from thinking it already has the latest
+            docker images ${IMAGE_NAME} --format "{{.ID}}" | sort -u | xargs -r docker rmi -f 2>/dev/null || echo "No old images to remove"
             
-            echo "=== Pulling latest Docker image ==="
-            # Pull the latest Docker image (force pull, no cache)
-            docker pull ${FULL_IMAGE} --quiet || {
-              echo "ERROR: Failed to pull image ${FULL_IMAGE}"
-              exit 1
-            }
+            # Also remove by specific tags
+            docker rmi ${FULL_IMAGE} ${LATEST_IMAGE} 2>/dev/null || echo "Specific tags not found locally"
+            
+            # Clean up dangling images
+            docker image prune -f || true
+            
+            echo "=== Pulling Docker image (SHA tag preferred) ==="
+            # Try to pull SHA tag first (more reliable), fallback to latest
+            if docker pull ${FULL_IMAGE} 2>&1 | tee /tmp/docker_pull.log; then
+              echo "✓ Successfully pulled SHA-tagged image: ${FULL_IMAGE}"
+              DEPLOY_IMAGE="${FULL_IMAGE}"
+            else
+              echo "⚠ SHA tag not found, falling back to latest tag"
+              if docker pull ${LATEST_IMAGE} 2>&1 | tee /tmp/docker_pull.log; then
+                echo "✓ Successfully pulled latest image: ${LATEST_IMAGE}"
+                DEPLOY_IMAGE="${LATEST_IMAGE}"
+              else
+                echo "ERROR: Failed to pull both SHA tag and latest image"
+                cat /tmp/docker_pull.log
+                exit 1
+              fi
+            fi
             
             echo "=== Verifying image was pulled ==="
             # Verify the image exists
-            if ! docker image inspect ${FULL_IMAGE} > /dev/null 2>&1; then
-              echo "ERROR: Image ${FULL_IMAGE} not found after pull!"
+            if ! docker image inspect ${DEPLOY_IMAGE} > /dev/null 2>&1; then
+              echo "ERROR: Image ${DEPLOY_IMAGE} not found after pull!"
               exit 1
             fi
             
-            # Show image details
+            # Show image details including digest
             echo "Image details:"
-            docker image inspect ${FULL_IMAGE} --format='{{.Id}} {{.Created}}' || true
+            docker image inspect ${DEPLOY_IMAGE} --format='ID: {{.Id}} | Created: {{.Created}} | Digest: {{index .RepoDigests 0}}' || true
             
-            echo "=== Pulling latest images for compose ==="
-            # Pull latest images for compose (ensures we have the latest)
-            docker compose -f docker-compose.prod.yml pull --quiet || {
+            echo "=== Updating docker-compose to use pulled image ==="
+            # Export image tag for docker-compose to use via environment variable
+            export DOCKER_IMAGE_TAG=${DEPLOY_IMAGE}
+            echo "Setting DOCKER_IMAGE_TAG=${DOCKER_IMAGE_TAG}"
+            
+            echo "=== Pulling images for compose ==="
+            # Pull images for compose (will use the image we just pulled)
+            DOCKER_IMAGE_TAG=${DEPLOY_IMAGE} docker compose -f docker-compose.prod.yml pull || {
               echo "Warning: docker compose pull failed, but continuing..."
             }
             
             echo "=== Starting containers with new image ==="
-            # Start containers with new image (force recreate to ensure latest code)
-            # Remove old containers first to ensure clean start
-            docker compose -f docker-compose.prod.yml up -d --force-recreate --remove-orphans || {
+            # Use environment variable to override image in docker-compose
+            # This ensures we use the exact image we just pulled
+            DOCKER_IMAGE_TAG=${DEPLOY_IMAGE} docker compose -f docker-compose.prod.yml up -d --force-recreate --remove-orphans || {
               echo "ERROR: Failed to start containers"
               exit 1
             }
@@ -157,24 +188,39 @@ jobs:
             # Show running containers with image info
             docker compose -f docker-compose.prod.yml ps
             
-            echo "=== Verifying running container uses latest image ==="
-            # Get the image ID of the pulled image
-            PULLED_IMAGE_ID=$(docker image inspect ${FULL_IMAGE} --format='{{.Id}}' 2>/dev/null || echo "")
+            echo "=== Verifying running container uses correct image ==="
+            # Get the image ID and details of the pulled image
+            PULLED_IMAGE_ID=$(docker image inspect ${DEPLOY_IMAGE} --format='{{.Id}}' 2>/dev/null || echo "")
+            PULLED_IMAGE_DIGEST=$(docker image inspect ${DEPLOY_IMAGE} --format='{{index .RepoDigests 0}}' 2>/dev/null || echo "")
             
             if [ -n "$PULLED_IMAGE_ID" ]; then
               echo "Pulled image ID: ${PULLED_IMAGE_ID}"
-              echo "Image created: $(docker image inspect ${FULL_IMAGE} --format='{{.Created}}' 2>/dev/null || echo 'unknown')"
+              echo "Pulled image digest: ${PULLED_IMAGE_DIGEST}"
+              echo "Image created: $(docker image inspect ${DEPLOY_IMAGE} --format='{{.Created}}' 2>/dev/null || echo 'unknown')"
             fi
             
-            # Verify container is using the correct image
-            CONTAINER_IMAGE=$(docker compose -f docker-compose.prod.yml ps --format '{{.Image}}' 2>/dev/null | head -n 1 || echo "")
-            if [ -n "$CONTAINER_IMAGE" ]; then
-              echo "Container image: ${CONTAINER_IMAGE}"
-              if [ "$CONTAINER_IMAGE" = "${FULL_IMAGE}" ]; then
-                echo "✓ Container is using the correct image"
+            # Get container details
+            CONTAINER_ID=$(docker compose -f docker-compose.prod.yml ps -q 2>/dev/null | head -n 1 || echo "")
+            if [ -n "$CONTAINER_ID" ]; then
+              CONTAINER_IMAGE=$(docker inspect ${CONTAINER_ID} --format='{{.Config.Image}}' 2>/dev/null || echo "")
+              CONTAINER_IMAGE_ID=$(docker inspect ${CONTAINER_ID} --format='{{.Image}}' 2>/dev/null || echo "")
+              
+              echo "Container ID: ${CONTAINER_ID}"
+              echo "Container image tag: ${CONTAINER_IMAGE}"
+              echo "Container image ID: ${CONTAINER_IMAGE_ID}"
+              
+              # Verify container is using the correct image ID
+              if [ "$CONTAINER_IMAGE_ID" = "$PULLED_IMAGE_ID" ]; then
+                echo "✓ Container is using the correct image (ID match)"
+              elif [ "$CONTAINER_IMAGE" = "${DEPLOY_IMAGE}" ] || [ "$CONTAINER_IMAGE" = "${FULL_IMAGE}" ] || [ "$CONTAINER_IMAGE" = "${LATEST_IMAGE}" ]; then
+                echo "✓ Container is using the correct image (tag match)"
               else
-                echo "⚠ Container image may differ from expected"
+                echo "⚠ WARNING: Container image may differ from expected!"
+                echo "  Expected: ${DEPLOY_IMAGE} (ID: ${PULLED_IMAGE_ID})"
+                echo "  Got: ${CONTAINER_IMAGE} (ID: ${CONTAINER_IMAGE_ID})"
               fi
+            else
+              echo "⚠ Could not find running container"
             fi
             
             echo "=== Recent logs ==="
@@ -193,6 +239,7 @@ jobs:
             docker image prune -f --filter "until=24h" || true
             
             echo "=== Deployment complete ==="
-            echo "Deployed image: ${FULL_IMAGE}"
+            echo "Deployed image: ${DEPLOY_IMAGE}"
+            echo "Image digest: ${PULLED_IMAGE_DIGEST}"
             echo "Deployment time: $(date)"
 
