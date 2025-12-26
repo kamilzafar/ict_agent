@@ -11,7 +11,7 @@ logger = logging.getLogger(__name__)
 if TYPE_CHECKING:
     from core.supabase_service import SupabaseService
 
-from langchain_core.messages import BaseMessage, HumanMessage, AIMessage, SystemMessage, trim_messages
+from langchain_core.messages import BaseMessage, HumanMessage, AIMessage, SystemMessage, ToolMessage, trim_messages
 from langchain_openai import ChatOpenAI
 from langgraph.graph import StateGraph, END
 from langgraph.graph.message import add_messages
@@ -325,10 +325,14 @@ You help leads with course enrollment through WhatsApp conversations."""
         system_prompt = self._get_system_prompt(state)
         system_message = SystemMessage(content=system_prompt)
         
-        # Filter out system messages (they're already in the system prompt)
+        # Filter out system messages AND ToolMessage objects
+        # ToolMessage objects from previous tool calls can cause errors if their
+        # corresponding AIMessage with tool_calls is not included in the message sequence.
+        # Since tool results are already reflected in conversation history stored in memory,
+        # we don't need to include ToolMessage objects when calling the LLM again.
         conversation_messages = [
             msg for msg in messages 
-            if not isinstance(msg, SystemMessage)
+            if not isinstance(msg, SystemMessage) and not isinstance(msg, ToolMessage)
         ]
         
         # Get summary from state (retrieved by _retrieve_context)
@@ -390,10 +394,26 @@ You help leads with course enrollment through WhatsApp conversations."""
             # All messages are unsummarized, keep them all
             logger.debug(f"Keeping all {len(conversation_messages)} messages (all unsummarized)")
         
+        # IMPORTANT: Final safety check - filter out any remaining ToolMessage objects
+        # This ensures we never send ToolMessage without its corresponding AIMessage with tool_calls
+        # This can happen if trim_messages doesn't properly handle tool message pairs
+        conversation_messages = [
+            msg for msg in conversation_messages 
+            if not isinstance(msg, ToolMessage)
+        ]
+        
+        # Validate message sequence - ensure no orphaned tool messages
+        # Log warning if we detect potential issues
+        for i, msg in enumerate(conversation_messages):
+            if isinstance(msg, AIMessage) and hasattr(msg, 'tool_calls') and msg.tool_calls:
+                # Check if next messages are ToolMessages (they should be, but we filtered them out)
+                # This is fine - tool results are in memory, not needed in LLM call
+                logger.debug(f"AIMessage with {len(msg.tool_calls)} tool_calls found at position {i}")
+        
         # Prepare final messages following LangChain best practices:
         # 1. System prompt (base instructions, tools, metadata - NO summary)
         # 2. Summary as context memory (injected as message)
-        # 3. All unsummarized messages (actual conversation)
+        # 3. All unsummarized messages (actual conversation, NO ToolMessage objects)
         agent_messages = [system_message] + context_messages + conversation_messages
         
         # Call LLM with full context

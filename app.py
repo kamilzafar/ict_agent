@@ -548,11 +548,21 @@ async def chat(request: ChatRequest):
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=str(e)
         )
-    except Exception as e:
-        logger.error(f"Error processing message: {e}", exc_info=True)
+    except RuntimeError as e:
+        # This is the error from agent.chat() - EXPOSE THE ACTUAL ERROR
+        error_msg = str(e)
+        logger.error(f"Agent runtime error: {error_msg}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Error processing message. Please try again."
+            detail=f"Agent error: {error_msg}"
+        )
+    except Exception as e:
+        # Log full error with stack trace and EXPOSE IT
+        error_msg = str(e)
+        logger.error(f"Unexpected error processing message: {error_msg}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error processing message: {error_msg}"
         )
 
 
