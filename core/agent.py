@@ -139,7 +139,7 @@ class IntelligentChatAgent:
             if SQLITE_CHECKPOINTER_AVAILABLE:
                 checkpoint_db = os.path.join(memory_db_path, "checkpoints.db")
                 os.makedirs(memory_db_path, exist_ok=True)
-                
+
                 # Ensure directory is writable (critical for Docker)
                 if not os.access(memory_db_path, os.W_OK):
                     logger.warning(f"Memory DB path not writable: {memory_db_path}")
@@ -147,17 +147,24 @@ class IntelligentChatAgent:
                         os.chmod(memory_db_path, 0o777)
                     except Exception as perm_error:
                         logger.error(f"Cannot fix permissions: {perm_error}")
-                
-                self.checkpointer = SqliteSaver.from_conn_string(f"sqlite:///{checkpoint_db}")
-                logger.info(f"✓ SQLite checkpointer initialized: {checkpoint_db}")
-                
-                # Test checkpointer by creating a test checkpoint
-                try:
-                    test_config = {"configurable": {"thread_id": "__test__"}}
-                    self.checkpointer.put(test_config, {}, {})
-                    logger.debug("Checkpointer write test successful")
-                except Exception as test_error:
-                    logger.warning(f"Checkpointer write test failed: {test_error}")
+
+                # Create SQLite connection directly (don't use context manager for long-running instance)
+                # Use absolute path for Windows compatibility
+                checkpoint_db_abs = os.path.abspath(checkpoint_db)
+                import sqlite3
+                conn = sqlite3.connect(
+                    checkpoint_db_abs,
+                    check_same_thread=False  # Thread-safe with lock in SqliteSaver
+                )
+                self.checkpointer = SqliteSaver(conn)
+                logger.info(f"✓ SQLite checkpointer initialized: {checkpoint_db_abs}")
+
+                # Verify database file was created
+                if os.path.exists(checkpoint_db_abs):
+                    file_size = os.path.getsize(checkpoint_db_abs)
+                    logger.debug(f"Checkpoint database file created: {file_size} bytes")
+                else:
+                    logger.warning(f"Checkpoint database file not found: {checkpoint_db_abs}")
             else:
                 self.checkpointer = MemorySaver()
                 logger.warning("Using in-memory checkpointer (not persistent). Install langgraph-checkpoint-sqlite for persistence.")
