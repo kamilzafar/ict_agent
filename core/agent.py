@@ -26,7 +26,6 @@ except ImportError:
 
 from core.memory import LongTermMemory
 from tools.supabase_tools import create_supabase_tools
-from tools.sheets_tools import create_sheets_tools
 from tools.template_tools import template_tools
 from core.context_injector import ContextInjector
 
@@ -46,7 +45,7 @@ class IntelligentChatAgent:
     
     def __init__(
         self,
-        model_name: str = "gpt-4.1-mini",  # Changed to gpt-4.1-mini for 128k context window
+        model_name: str = "gpt-4.1-mini",  # GPT-4.1 Mini with 128k context window
         temperature: float = 0.7,
         memory_db_path: str = "/app/memory_db",
         summarize_interval: int = 10,
@@ -104,22 +103,15 @@ class IntelligentChatAgent:
             self.supabase_tools = []
         
         try:
-            self.sheets_tools = create_sheets_tools()  # Google Sheets tools for lead data
-            logger.debug(f"Created {len(self.sheets_tools)} Google Sheets tools")
-        except Exception as e:
-            logger.warning(f"Error creating Google Sheets tools: {e}")
-            self.sheets_tools = []
-        
-        try:
             self.template_tools = template_tools  # Always available
             logger.debug(f"Created {len(self.template_tools)} template tools")
         except Exception as e:
             logger.warning(f"Error loading template tools: {e}")
             self.template_tools = []
 
-        # Combine all tools
-        all_tools = self.supabase_tools + self.sheets_tools + self.template_tools
-        logger.info(f"✓ Total tools available: {len(all_tools)} (Supabase: {len(self.supabase_tools)}, Sheets: {len(self.sheets_tools)}, Templates: {len(self.template_tools)})")
+        # Combine all tools (Supabase now includes lead data append)
+        all_tools = self.supabase_tools + self.template_tools
+        logger.info(f"✓ Total tools available: {len(all_tools)} (Supabase: {len(self.supabase_tools)} [includes lead data], Templates: {len(self.template_tools)})")
         
         # Bind tools to LLM if available
         if all_tools:
@@ -325,14 +317,11 @@ You help leads with course enrollment through WhatsApp conversations."""
         system_prompt = self._get_system_prompt(state)
         system_message = SystemMessage(content=system_prompt)
         
-        # Filter out system messages AND ToolMessage objects
-        # ToolMessage objects from previous tool calls can cause errors if their
-        # corresponding AIMessage with tool_calls is not included in the message sequence.
-        # Since tool results are already reflected in conversation history stored in memory,
-        # we don't need to include ToolMessage objects when calling the LLM again.
+        # Filter out only system messages (keep all conversation messages including ToolMessages)
+        # We need to keep ToolMessages because OpenAI API requires them to follow AIMessages with tool_calls
         conversation_messages = [
-            msg for msg in messages 
-            if not isinstance(msg, SystemMessage) and not isinstance(msg, ToolMessage)
+            msg for msg in messages
+            if not isinstance(msg, SystemMessage)
         ]
         
         # Get summary from state (retrieved by _retrieve_context)
@@ -393,22 +382,51 @@ You help leads with course enrollment through WhatsApp conversations."""
         else:
             # All messages are unsummarized, keep them all
             logger.debug(f"Keeping all {len(conversation_messages)} messages (all unsummarized)")
-        
-        # IMPORTANT: Final safety check - filter out any remaining ToolMessage objects
-        # This ensures we never send ToolMessage without its corresponding AIMessage with tool_calls
-        # This can happen if trim_messages doesn't properly handle tool message pairs
-        conversation_messages = [
-            msg for msg in conversation_messages 
-            if not isinstance(msg, ToolMessage)
-        ]
-        
-        # Validate message sequence - ensure no orphaned tool messages
-        # Log warning if we detect potential issues
+
+        # Validate and clean message sequence to prevent OpenAI API errors
+        # Build list of valid tool_call_ids (from AIMessages that will be kept)
+        valid_tool_call_ids = set()
+        messages_to_remove = set()
+
+        # First pass: identify AIMessages with tool_calls and track their IDs
         for i, msg in enumerate(conversation_messages):
             if isinstance(msg, AIMessage) and hasattr(msg, 'tool_calls') and msg.tool_calls:
-                # Check if next messages are ToolMessages (they should be, but we filtered them out)
-                # This is fine - tool results are in memory, not needed in LLM call
-                logger.debug(f"AIMessage with {len(msg.tool_calls)} tool_calls found at position {i}")
+                tool_call_ids = [tc['id'] for tc in msg.tool_calls]
+
+                # Check if all corresponding ToolMessages exist after this AIMessage
+                following_tool_msgs = {}
+                for j in range(i+1, len(conversation_messages)):
+                    if isinstance(conversation_messages[j], ToolMessage):
+                        following_tool_msgs[conversation_messages[j].tool_call_id] = j
+                    elif not isinstance(conversation_messages[j], ToolMessage):
+                        # Stop looking after we hit a non-ToolMessage
+                        break
+
+                # If we don't have ToolMessages for ALL tool_calls, remove this AIMessage
+                missing_responses = [tcid for tcid in tool_call_ids if tcid not in following_tool_msgs]
+                if missing_responses:
+                    logger.warning(f"AIMessage at {i} has tool_calls {tool_call_ids} but missing ToolMessages for {missing_responses}")
+                    logger.warning(f"Removing AIMessage at position {i} and its partial ToolMessages to prevent API error")
+                    messages_to_remove.add(i)
+                    # Also remove the ToolMessages that DO exist for this AIMessage
+                    for tcid, idx in following_tool_msgs.items():
+                        messages_to_remove.add(idx)
+                else:
+                    # All ToolMessages present, mark these tool_call_ids as valid
+                    valid_tool_call_ids.update(tool_call_ids)
+
+        # Second pass: remove orphaned ToolMessages (ToolMessages without corresponding AIMessage)
+        for i, msg in enumerate(conversation_messages):
+            if isinstance(msg, ToolMessage):
+                if msg.tool_call_id not in valid_tool_call_ids:
+                    logger.warning(f"Orphaned ToolMessage at {i} with tool_call_id={msg.tool_call_id}, removing")
+                    messages_to_remove.add(i)
+
+        # Remove marked messages
+        conversation_messages = [msg for i, msg in enumerate(conversation_messages) if i not in messages_to_remove]
+
+        if messages_to_remove:
+            logger.info(f"Removed {len(messages_to_remove)} messages to maintain valid tool call sequence")
         
         # Prepare final messages following LangChain best practices:
         # 1. System prompt (base instructions, tools, metadata - NO summary)
@@ -441,19 +459,16 @@ You help leads with course enrollment through WhatsApp conversations."""
         tool_info = ""
         if self.all_tools:
             tool_descriptions = []
-            
-            # Supabase tools (for fetching data)
+
+            # Supabase tools (for fetching data and saving leads)
             if self.supabase_tools:
                 tool_descriptions.append("fetch_course_links - always use this tool to Get demo links, PDF links, or course page links from database")
                 tool_descriptions.append("fetch_course_details - always use this tool to Get course information (fees, duration, dates, professor, locations) from database")
                 tool_descriptions.append("fetch_faqs - always use this tool to Get FAQs from database")
                 tool_descriptions.append("fetch_professor_info - always use this tool to Get professor/trainer information from database")
                 tool_descriptions.append("fetch_company_info - always use this tool to Get company information (contact, social media, locations) from database")
-            
-            # Google Sheets tools (for saving lead data)
-            if self.sheets_tools:
-                tool_descriptions.append("append_lead_data - always use this tool to Save lead data to Google Sheets (MANDATORY before sharing demo link)")
-            
+                tool_descriptions.append("append_lead_data - always use this tool to Save/Update lead data in Supabase (UPSERT - MANDATORY before sharing demo link)")
+
             if tool_descriptions:
                 tool_info = f"\n\n## AVAILABLE TOOLS:\n\nYou have access to the following tools:\n"
                 for desc in tool_descriptions:
@@ -464,8 +479,7 @@ You help leads with course enrollment through WhatsApp conversations."""
                 tool_info += "- Always use this tool To GET FAQs → Use fetch_faqs\n"
                 tool_info += "- Always use this tool To GET professor info → Use fetch_professor_info\n"
                 tool_info += "- Always use this tool To GET company info → Use fetch_company_info\n"
-                if self.sheets_tools:
-                    tool_info += "- Always use this tool To SAVE lead data (before demo link) → Use append_lead_data (MANDATORY)\n"
+                tool_info += "- Always use this tool To SAVE lead data to Supabase (before demo link) → Use append_lead_data (MANDATORY)\n"
         
         # Add conversation metadata
         context_info = f"""
@@ -511,11 +525,13 @@ You help leads with course enrollment through WhatsApp conversations."""
         if not conversation_id:
             return state
         
-        # Filter out system messages and tool call messages
+        # Filter out system messages and ToolMessages (keep AIMessages even if they have tool_calls)
+        # We want to summarize the conversation flow, including when AI used tools
+        # ToolMessages are internal responses and don't need to be in the summary
         conversation_messages = [
-            msg for msg in messages 
-            if not isinstance(msg, SystemMessage) 
-            and not (hasattr(msg, 'tool_calls') and msg.tool_calls)
+            msg for msg in messages
+            if not isinstance(msg, SystemMessage)
+            and not isinstance(msg, ToolMessage)
         ]
         
         # Only summarize the last N messages (where N = summarize_interval)

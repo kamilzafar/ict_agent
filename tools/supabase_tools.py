@@ -46,6 +46,17 @@ class SearchCoursesInput(BaseModel):
     limit: int = Field(default=10, description="Maximum number of courses to return")
 
 
+class AppendLeadDataInput(BaseModel):
+    """Input schema for appending/updating lead data in Supabase."""
+    name: Optional[str] = Field(default=None, description="Lead's name")
+    phone: Optional[str] = Field(default=None, description="Lead's phone number")
+    selected_course: Optional[str] = Field(default=None, description="Course they're interested in")
+    education_level: Optional[str] = Field(default=None, description="Their education level (e.g., Bachelors, Masters)")
+    goal: Optional[str] = Field(default=None, description="Their goal/motivation for taking the course")
+    notes: Optional[str] = Field(default=None, description="Additional notes about the lead")
+    add_timestamp: bool = Field(default=True, description="Always True - timestamp is added automatically")
+
+
 def create_supabase_tools(supabase_service) -> List:
     """Create all optimized Supabase database tools for the LangChain agent.
     
@@ -334,7 +345,95 @@ def create_supabase_tools(supabase_service) -> List:
             return f"Error searching courses: {str(e)}"
     
     tools.append(search_courses)
-    
-    logger.info(f"Created {len(tools)} optimized Supabase tools")
+
+    # 7. Save/Update Lead Data Tool (Supabase UPSERT operation)
+    @tool("append_lead_data", args_schema=AppendLeadDataInput)
+    def append_lead_data(
+        name: Optional[str] = None,
+        phone: Optional[str] = None,
+        selected_course: Optional[str] = None,
+        education_level: Optional[str] = None,
+        goal: Optional[str] = None,
+        notes: Optional[str] = None,
+        add_timestamp: bool = True
+    ) -> str:
+        """CRITICAL: ALWAYS use this tool to SAVE or UPDATE lead data in Supabase database BEFORE sharing demo link.
+
+        This tool performs UPSERT operation (CREATE new lead OR UPDATE existing lead).
+        All parameters are optional, but you should pass ALL available information from the conversation.
+
+        MANDATORY USAGE:
+        - ALWAYS call this tool BEFORE sharing demo video link
+        - Pass ALL collected data (name, course, education, goal, phone)
+        - If some fields are missing/None, still call with available data
+        - Minimum required: selected_course
+
+        UPSERT LOGIC (Automatic):
+        - Searches for existing lead by phone (if provided)
+        - If not found by phone, searches by name (if provided)
+        - If lead EXISTS → UPDATE (merge new data with existing, keeps old data)
+        - If lead NOT EXISTS → CREATE (insert new lead)
+
+        USE CASES:
+        1. First time contact → Creates new lead
+        2. Returning customer → Updates existing lead with new info
+        3. Progressive data collection → Each call adds more info to same lead
+
+        Args:
+            name: Lead's name (if collected)
+            phone: Lead's phone number (if collected)
+            selected_course: Course they selected (REQUIRED)
+            education_level: Their education level (if collected)
+            goal: Their goal/motivation (if collected)
+            notes: Any additional notes
+            add_timestamp: Always True (timestamp added automatically)
+
+        Returns:
+            Success/error message with lead ID and action (created/updated)
+
+        Examples:
+            CREATE (new lead):
+            - append_lead_data(name="Hassan", phone="03001234567", selected_course="CTA", education_level="Bachelors", goal="Start tax consultancy", add_timestamp=True)
+            - Returns: "✓ Lead data created successfully (ID: abc-123). You can now share the demo link."
+
+            UPDATE (existing lead):
+            - append_lead_data(phone="03001234567", notes="Interested in demo, will join next batch", add_timestamp=True)
+            - Returns: "✓ Lead data updated successfully (ID: abc-123). You can now share the demo link."
+
+            MINIMAL (just course):
+            - append_lead_data(selected_course="CTA", add_timestamp=True)
+            - Returns: "✓ Lead data created successfully (ID: def-456). You can now share the demo link."
+        """
+        try:
+            result = supabase_service.append_lead_data(
+                name=name,
+                phone=phone,
+                selected_course=selected_course,
+                education_level=education_level,
+                goal=goal,
+                notes=notes,
+                add_timestamp=add_timestamp
+            )
+
+            if result.get("status") == "success":
+                action = result.get("action", "saved")
+                lead_id = result.get("lead_id", "unknown")
+                elapsed = result.get("elapsed_ms", 0)
+
+                logger.info(f"✓ Lead data {action}: {lead_id} in {elapsed:.2f}ms")
+
+                return f"✓ Lead data {action} successfully (ID: {lead_id}). You can now share the demo link."
+            else:
+                error_msg = result.get("message", "Unknown error")
+                logger.error(f"Failed to save lead data: {error_msg}")
+                return f"Error saving lead data: {error_msg}"
+
+        except Exception as e:
+            logger.error(f"Error in append_lead_data tool: {e}", exc_info=True)
+            return f"Error saving lead data: {str(e)}"
+
+    tools.append(append_lead_data)
+
+    logger.info(f"Created {len(tools)} optimized Supabase tools (including lead data append)")
     return tools
 

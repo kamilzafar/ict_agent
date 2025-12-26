@@ -191,3 +191,134 @@ class SupabaseService:
             elapsed = (time.time() - start_time) * 1000
             logger.error(f"Error searching courses ({elapsed:.2f}ms): {e}", exc_info=True)
             return []
+
+    def append_lead_data(
+        self,
+        name: Optional[str] = None,
+        phone: Optional[str] = None,
+        selected_course: Optional[str] = None,
+        education_level: Optional[str] = None,
+        goal: Optional[str] = None,
+        notes: Optional[str] = None,
+        add_timestamp: bool = False
+    ) -> Dict[str, Any]:
+        """Append or update lead data in Supabase - direct database call, no caching.
+
+        This method will:
+        1. Search for existing lead by phone or name
+        2. If found, UPDATE the existing record (merge new data with existing)
+        3. If not found, INSERT a new record
+
+        Args:
+            name: Lead's name
+            phone: Lead's phone number
+            selected_course: Course they're interested in
+            education_level: Their education level
+            goal: Their goal/motivation
+            notes: Additional notes
+            add_timestamp: Whether to add timestamp (always added automatically)
+
+        Returns:
+            Dict with status and message
+        """
+        start_time = time.time()
+
+        try:
+            from datetime import datetime
+
+            # Build data dict (only include provided fields)
+            data = {}
+            if name:
+                data['name'] = name
+            if phone:
+                data['phone'] = phone
+            if selected_course:
+                data['selected_course'] = selected_course
+            if education_level:
+                data['education_level'] = education_level
+            if goal:
+                data['goal'] = goal
+            if notes:
+                data['notes'] = notes
+
+            # Always add timestamp
+            data['timestamp'] = datetime.now().isoformat()
+
+            # If no data provided, return error
+            if len(data) == 1:  # Only timestamp
+                return {
+                    "status": "error",
+                    "message": "No lead data provided. Please provide at least one field (name, phone, course, etc.)"
+                }
+
+            # Try to find existing lead by phone or name
+            existing_lead = None
+
+            if phone:
+                # Search by phone first (most unique identifier)
+                query = self.client.table("leads").select("*").eq("phone", phone).limit(1)
+                response = query.execute()
+                if response.data:
+                    existing_lead = response.data[0]
+
+            if not existing_lead and name:
+                # Search by name if phone not provided or not found
+                query = self.client.table("leads").select("*").ilike("name", name).limit(1)
+                response = query.execute()
+                if response.data:
+                    existing_lead = response.data[0]
+
+            if existing_lead:
+                # UPDATE existing lead (merge new data)
+                lead_id = existing_lead['id']
+
+                # Merge with existing data (new data overwrites old)
+                update_data = {**existing_lead, **data}
+
+                # Remove 'id' from update data (can't update primary key)
+                update_data.pop('id', None)
+                update_data.pop('created_at', None)  # Don't update created_at
+
+                response = self.client.table("leads").update(update_data).eq("id", lead_id).execute()
+
+                elapsed = (time.time() - start_time) * 1000
+                logger.info(f"✓ Updated lead {lead_id} in {elapsed:.2f}ms")
+
+                return {
+                    "status": "success",
+                    "action": "updated",
+                    "message": f"Lead data updated successfully for {name or phone or 'lead'}",
+                    "lead_id": lead_id,
+                    "elapsed_ms": elapsed
+                }
+            else:
+                # INSERT new lead
+                response = self.client.table("leads").insert(data).execute()
+
+                if response.data:
+                    lead_id = response.data[0].get('id')
+                    elapsed = (time.time() - start_time) * 1000
+                    logger.info(f"✓ Created new lead {lead_id} in {elapsed:.2f}ms")
+
+                    return {
+                        "status": "success",
+                        "action": "created",
+                        "message": f"New lead created successfully for {name or phone or 'lead'}",
+                        "lead_id": lead_id,
+                        "elapsed_ms": elapsed
+                    }
+                else:
+                    elapsed = (time.time() - start_time) * 1000
+                    logger.error(f"Failed to create lead: no data returned ({elapsed:.2f}ms)")
+                    return {
+                        "status": "error",
+                        "message": "Failed to create lead in database"
+                    }
+
+        except Exception as e:
+            elapsed = (time.time() - start_time) * 1000
+            logger.error(f"Error appending lead data ({elapsed:.2f}ms): {e}", exc_info=True)
+            return {
+                "status": "error",
+                "message": f"Error saving lead data: {str(e)}"
+            }
