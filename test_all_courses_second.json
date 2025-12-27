@@ -1,0 +1,26 @@
+{
+  "response": "2. Advance Taxation & Litigations (ATL)\n\n💰 Fee: 60,000 PKR\n📅 Duration: 3 months (12 weeks)\n📆 Next batch: January 28, 2026\n📍 Mode: Online only\n\nDusra course 'UAE Taxation Course' dekhna pasand karenge?",
+  "conversation_id": "test_all_courses_001",
+  "turn_count": 2,
+  "context_used": [
+    {
+      "content": "User: Sab courses ki fees batao\nAssistant: Sure! Starting with first course:\n\n1. Certified Tax Advisor (CTA)\n\n💰 Fee: 60,000 PKR\n📅 Duration: 4 months (16 weeks)\n📆 Next batch: January 20, 2026\n📍 Mode: Online + Physical\n\nDusra course 'Advance Taxation & Litigations' dekhna chahenge?",
+      "metadata": {
+        "conversation_id": "test_all_courses_001",
+        "type": "recent_unsummarized_turn",
+        "timestamp": "2025-12-28T03:06:13.982536"
+      }
+    }
+  ],
+  "stage": "NEW",
+  "lead_data": {
+    "name": null,
+    "phone": null,
+    "selected_course": null,
+    "education_level": null,
+    "goal": null,
+    "demo_shared": false,
+    "enrolled": false
+  },
+  "timestamp": "2025-12-28T03:06:39.464745"
+}

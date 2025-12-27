@@ -1,0 +1,17 @@
+{
+  "response": "Sure! Starting with first course:\n\n1. Certified Tax Advisor (CTA)\n\n💰 Fee: 60,000 PKR\n📅 Duration: 4 months (16 weeks)\n📆 Next batch: January 20, 2026\n📍 Mode: Online + Physical\n\nDusra course 'Advance Taxation & Litigations' dekhna chahenge?",
+  "conversation_id": "test_all_courses_001",
+  "turn_count": 1,
+  "context_used": [],
+  "stage": "NEW",
+  "lead_data": {
+    "name": null,
+    "phone": null,
+    "selected_course": null,
+    "education_level": null,
+    "goal": null,
+    "demo_shared": false,
+    "enrolled": false
+  },
+  "timestamp": "2025-12-28T03:06:13.984826"
+}
