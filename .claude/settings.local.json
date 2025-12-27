@@ -9,7 +9,9 @@
       "Bash(else echo \"not found\")",
       "Bash(fi)",
       "Bash(python:*)",
-      "Bash(uv run python:*)"
+      "Bash(uv run python:*)",
+      "Bash(curl:*)",
+      "Bash(.venv/Scripts/python:*)"
     ]
   },
   "outputStyle": "default"

@@ -125,16 +125,30 @@ def create_supabase_tools(supabase_service) -> List:
     # 2. Course Details Tool (optimized)
     @tool("fetch_course_details", args_schema=CourseDetailsInput)
     def fetch_course_details(course_name: str, field: Optional[str] = None) -> str:
-        """Always use this tools to Fetch course information from database.
-        
-        Returns fees, duration, dates, professor, locations, enrollment status, benefits, description.
-        
+        """ALWAYS use this tool to fetch course information from database.
+
+        USE THIS TOOL FOR:
+        - Pricing/Fee/Cost queries ("fee kitni hai", "price kya hai", "pricing share karo")
+        - Duration/Length ("kitne mahine ka hai", "duration kya hai")
+        - Start dates ("kab start hoga", "enrollment date")
+        - Professor/Teacher info ("teacher kaun hai")
+        - Locations ("kahan classes hain")
+        - Course benefits, description, mode (online/physical)
+
+        Returns ALL available course data including:
+        - course_fee_physical, course_fee_online, course_fee_hibernate (if available)
+        - course_duration, course_start_date_or_last_enrollment_date
+        - professor_name, mode_of_courses
+        - location_islamabad, location_karachi, location_lahore
+        - course_benefits, course_description
+        - enrollment_status, online_available, physical_available
+
         Args:
-            course_name: Course name (e.g., "CTA", "USA Taxation")
-            field: Optional specific field (e.g., "course_fee", "duration")
-        
+            course_name: Course name (e.g., "CTA", "USA Taxation", "Transfer Pricing")
+            field: Optional specific field (e.g., "course_fee_physical", "duration")
+
         Returns:
-            Course details or error message
+            Course details with ALL available fields or error message
         """
         try:
             courses = supabase_service.get_course_details(course_name)
@@ -156,8 +170,16 @@ def create_supabase_tools(supabase_service) -> List:
                 result_parts = []
                 for key, value in course.items():
                     if value is not None and value != "" and key != "id":
-                        result_parts.append(f"{key}: {value}")
-                
+                        # Clean Unicode formatting characters to avoid encoding issues
+                        if isinstance(value, str):
+                            # Replace bold/italic Unicode characters with regular ASCII
+                            import unicodedata
+                            # Normalize to closest ASCII equivalent
+                            value_clean = unicodedata.normalize('NFKD', value).encode('ascii', 'ignore').decode('ascii')
+                            result_parts.append(f"{key}: {value_clean}")
+                        else:
+                            result_parts.append(f"{key}: {value}")
+
                 if result_parts:
                     return "\n".join(result_parts)
                 return f"Error: No data found for course '{course_name}'"
@@ -165,7 +187,9 @@ def create_supabase_tools(supabase_service) -> List:
         except Exception as e:
             logger.error(f"Error fetching course details: {e}", exc_info=True)
             return f"Error fetching course details: {str(e)}"
-    
+
+    tools.append(fetch_course_details)
+
     # 3. FAQs Tool (optimized)
     @tool("fetch_faqs", args_schema=FAQsInput)
     def fetch_faqs(query: Optional[str] = None, course_name: Optional[str] = None, top_k: int = 5) -> str:
