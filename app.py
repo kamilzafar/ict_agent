@@ -170,6 +170,7 @@ async def lifespan(app: FastAPI):
             temperature=float(os.getenv("TEMPERATURE", "0.7")),
             memory_db_path=os.getenv("MEMORY_DB_PATH", "/app/memory_db"),
             summarize_interval=int(os.getenv("SUMMARIZE_INTERVAL", "10")),
+            recursion_limit=int(os.getenv("RECURSION_LIMIT", "50")),
             supabase_service=supabase_service
         )
         logger.info("✓ Agent initialized successfully")

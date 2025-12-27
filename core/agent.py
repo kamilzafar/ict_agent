@@ -49,19 +49,22 @@ class IntelligentChatAgent:
         temperature: float = 0.7,
         memory_db_path: str = "/app/memory_db",
         summarize_interval: int = 10,
+        recursion_limit: int = 50,
         supabase_service: Optional[Any] = None
     ):
         """Initialize the agent.
-        
+
         Args:
             model_name: Name of the LLM model to use
             temperature: Temperature for the LLM
             memory_db_path: Path to the memory database
             summarize_interval: Number of turns before summarizing
+            recursion_limit: Maximum graph recursion depth (default: 50)
             supabase_service: Optional SupabaseService instance
         """
         self.memory = LongTermMemory(persist_directory=memory_db_path)
         self.summarize_interval = summarize_interval
+        self.recursion_limit = recursion_limit
         
         # Initialize context injector if Supabase service is provided
         self.context_injector = None
@@ -495,26 +498,90 @@ You help leads with course enrollment through WhatsApp conversations."""
         return full_prompt
     
     def _should_continue(self, state: AgentState) -> str:
-        """Determine if we should continue (call tools), summarize, or end."""
+        """Determine if we should continue (call tools), summarize, or end.
+
+        SAFETY MECHANISMS:
+        1. Tool call counter - prevent infinite loops
+        2. Duplicate tool detection - avoid redundant calls
+        3. Maximum iterations per turn - hard limit
+        """
         messages = state["messages"]
         last_message = messages[-1]
-        
-        # If the last message has tool calls, continue to tools
+
+        # SAFETY CHECK 1: Count tool calls in this conversation turn
+        # Prevent infinite loops by limiting tool calls per user message
+        tool_call_count = 0
+        ai_message_count = 0
+
+        # Count from the last HumanMessage (current turn)
+        for i in range(len(messages) - 1, -1, -1):
+            msg = messages[i]
+            if isinstance(msg, HumanMessage):
+                break  # Stop at last user message (start of current turn)
+            if isinstance(msg, AIMessage):
+                ai_message_count += 1
+                if hasattr(msg, 'tool_calls') and msg.tool_calls:
+                    tool_call_count += len(msg.tool_calls)
+
+        # SAFETY CHECK 2: Hard limit on tool calls per turn (scalability)
+        MAX_TOOL_CALLS_PER_TURN = 10  # Reasonable limit for most queries
+        MAX_AI_ITERATIONS = 6  # Maximum agent->tools->agent cycles
+
+        if tool_call_count >= MAX_TOOL_CALLS_PER_TURN:
+            logger.warning(
+                f"⚠️ SAFETY STOP: Reached max tool calls ({tool_call_count}/{MAX_TOOL_CALLS_PER_TURN}) "
+                f"for current turn. Forcing end to prevent infinite loop."
+            )
+            return "end"
+
+        if ai_message_count >= MAX_AI_ITERATIONS:
+            logger.warning(
+                f"⚠️ SAFETY STOP: Reached max AI iterations ({ai_message_count}/{MAX_AI_ITERATIONS}) "
+                f"for current turn. Forcing end to prevent infinite loop."
+            )
+            return "end"
+
+        # SAFETY CHECK 3: Detect duplicate tool calls (same tool with same args)
         if hasattr(last_message, 'tool_calls') and last_message.tool_calls:
+            # Check if we're about to make a duplicate call
+            for new_call in last_message.tool_calls:
+                for i in range(len(messages) - 2, -1, -1):  # Check previous messages
+                    msg = messages[i]
+                    if isinstance(msg, HumanMessage):
+                        break  # Stop at last user message
+                    if isinstance(msg, AIMessage) and hasattr(msg, 'tool_calls') and msg.tool_calls:
+                        for prev_call in msg.tool_calls:
+                            # Check if same tool with same arguments
+                            if (prev_call.get('name') == new_call.get('name') and
+                                prev_call.get('args') == new_call.get('args')):
+                                logger.warning(
+                                    f"⚠️ DUPLICATE TOOL CALL DETECTED: {new_call.get('name')} "
+                                    f"with same args. This might indicate a loop."
+                                )
+                                # Still allow it, but log for monitoring
+
+            # Log tool usage for monitoring
+            tool_names = [tc.get('name') for tc in last_message.tool_calls]
+            logger.info(
+                f"Tool calls requested: {tool_names} "
+                f"(total this turn: {tool_call_count + len(last_message.tool_calls)}/{MAX_TOOL_CALLS_PER_TURN})"
+            )
+
             return "continue"
-        
+
         # Check if we should summarize (every N turns)
         # Summarize AFTER every N messages (e.g., after turn 10, 20, 30, etc.)
         turn_count = state.get("turn_count", 0)
-        
+
         # Only summarize when we've completed a full interval (turn 10, 20, 30, etc.)
         # turn_count is 1-indexed (turn 1, 2, 3, ..., 10, 11, ...)
         # So we summarize after turn 10, 20, 30, etc.
         if turn_count >= self.summarize_interval and turn_count % self.summarize_interval == 0:
             logger.info(f"Triggering summarization: turn_count={turn_count}, interval={self.summarize_interval}")
             return "summarize"
-        
+
         # Otherwise, end (response is complete)
+        logger.debug(f"Turn complete: {tool_call_count} tools used, {ai_message_count} AI iterations")
         return "end"
     
     def _summarize_conversation(self, state: AgentState) -> AgentState:
@@ -763,12 +830,13 @@ Summary:"""
         if not conversation_id:
             conversation_id = str(uuid.uuid4())
         
-        # Prepare config with thread_id for checkpointer
+        # Prepare config with thread_id for checkpointer and recursion_limit
         if config is None:
             config = {
                 "configurable": {
                     "thread_id": conversation_id
-                }
+                },
+                "recursion_limit": self.recursion_limit  # Increased from default 25 to handle multiple tool calls
             }
         
         # Get current turn count from memory (for tracking)
