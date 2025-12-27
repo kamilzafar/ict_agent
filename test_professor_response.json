@@ -1,0 +1,17 @@
+{
+  "response": "USA Taxation Course ke instructor ki details abhi database mein available nahi hain, magar main apki madad ke liye kisi aur sawal ka jawab dena chahunga. Apko course ki fees ya demo dekhna hai?",
+  "conversation_id": "test_schema_professor",
+  "turn_count": 1,
+  "context_used": [],
+  "stage": "COURSE_SELECTED",
+  "lead_data": {
+    "name": null,
+    "phone": null,
+    "selected_course": "USA_TAXATION",
+    "education_level": null,
+    "goal": null,
+    "demo_shared": false,
+    "enrolled": false
+  },
+  "timestamp": "2025-12-28T02:38:15.492316"
+}

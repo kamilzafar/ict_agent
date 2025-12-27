@@ -12,49 +12,103 @@ logger = logging.getLogger(__name__)
 
 class CourseLinksInput(BaseModel):
     """Input schema for fetching course links."""
-    course_name: str = Field(description="Name of the course to fetch links for (e.g., 'Certified Tax Advisor', 'CTA', 'USA Taxation')")
-    link_type: Optional[str] = Field(default=None, description="Type of link to fetch: 'demo' for demo_link, 'pdf' for pdf_link, or None for all links")
+    course_name: str = Field(
+        description="EXACT course name from database (e.g., 'Certified Tax Advisor - Online', 'USA Taxation Course', 'Saudi Taxation Course'). Use the full course name, not abbreviations."
+    )
+    link_type: Optional[str] = Field(
+        default=None,
+        description="Type of link to fetch: 'demo' for demo video link, 'pdf' for PDF/brochure link, or None for all available links"
+    )
 
 
 class CourseDetailsInput(BaseModel):
     """Input schema for fetching course details."""
-    course_name: str = Field(description="Name of the course to fetch details for (e.g., 'Certified Tax Advisor', 'CTA', 'USA Taxation')")
-    field: Optional[str] = Field(default=None, description="Specific field to fetch (e.g., 'course_fee', 'duration', 'professor_name') or None for all details")
+    course_name: str = Field(
+        description="EXACT course name from database. Examples: 'Certified Tax Advisor - Online', 'USA Taxation Course', 'UAE Taxation Course', 'Saudi Taxation Course', 'Advance Taxation & Litigations'. Use full course name as stored in Supabase, not abbreviations."
+    )
+    field: Optional[str] = Field(
+        default=None,
+        description="Specific field to fetch: 'course_fee_physical', 'course_fee_online', 'course_duration', 'professor_name', 'course_start_date_or_last_enrollment_date', 'mode_of_courses', 'course_benefits'. Leave as None to get ALL course details (recommended for pricing queries)."
+    )
 
 
 class FAQsInput(BaseModel):
     """Input schema for fetching FAQs."""
-    query: Optional[str] = Field(default=None, description="Search query to find relevant FAQs, or None for all FAQs")
-    course_name: Optional[str] = Field(default=None, description="Optional course name to filter FAQs by")
-    top_k: int = Field(default=5, description="Number of FAQs to return")
+    query: Optional[str] = Field(
+        default=None,
+        description="Natural language search query to find relevant FAQs (e.g., 'installment', 'refund policy', 'certificate', 'job guarantee'). Use keywords from user's question. Leave as None to get general FAQs."
+    )
+    course_name: Optional[str] = Field(
+        default=None,
+        description="EXACT course name from database (e.g., 'USA Taxation Course') to filter FAQs specific to that course. Leave as None for general FAQs."
+    )
+    top_k: int = Field(
+        default=5,
+        description="Number of FAQ results to return (default: 5). Use 3 for quick answers, 10 for comprehensive searches."
+    )
 
 
 class ProfessorInput(BaseModel):
     """Input schema for fetching professor information."""
-    professor_name: Optional[str] = Field(default=None, description="Name of the professor to fetch info for, or None for all professors")
-    course_name: Optional[str] = Field(default=None, description="Course name to find associated professor")
+    professor_name: Optional[str] = Field(
+        default=None,
+        description="Professor's name (e.g., 'Rai Basharat Ali', 'Sir Rai Basharat Ali'). Leave as None if you only have course_name."
+    )
+    course_name: Optional[str] = Field(
+        default=None,
+        description="EXACT course name from database (e.g., 'Certified Tax Advisor - Online', 'USA Taxation Course') to find the professor teaching that course. Use this when user asks 'USA Taxation ka teacher kaun hai?'. Leave as None if you have professor_name."
+    )
 
 
 class CompanyInfoInput(BaseModel):
     """Input schema for fetching company information."""
-    field: Optional[str] = Field(default=None, description="Specific field to fetch (e.g., 'contact_number', 'website') or None for all info")
+    field: Optional[str] = Field(
+        default=None,
+        description="Specific field to fetch (e.g., 'Main Contact Number', 'WhatsApp Number', 'Email Address', 'Website URL', 'Facebook Page', 'Instagram Handle', 'Office Location'). Leave as None to get ALL company information."
+    )
 
 
 class SearchCoursesInput(BaseModel):
     """Input schema for searching courses."""
-    search_term: str = Field(description="Search term to find courses by name or description")
-    limit: int = Field(default=10, description="Maximum number of courses to return")
+    search_term: str = Field(
+        description="Keywords to search in course names and descriptions (e.g., 'tax', 'USA', 'accounting', 'UAE', 'export', 'stock exchange'). Searches both course names and descriptions."
+    )
+    limit: int = Field(
+        default=10,
+        description="Maximum number of course results to return (default: 10). Use 5 for quick searches, 15 for comprehensive listings."
+    )
 
 
 class AppendLeadDataInput(BaseModel):
     """Input schema for appending/updating lead data in Supabase."""
-    name: Optional[str] = Field(default=None, description="Lead's name")
-    phone: Optional[str] = Field(default=None, description="Lead's phone number")
-    selected_course: Optional[str] = Field(default=None, description="Course they're interested in")
-    education_level: Optional[str] = Field(default=None, description="Their education level (e.g., Bachelors, Masters)")
-    goal: Optional[str] = Field(default=None, description="Their goal/motivation for taking the course")
-    notes: Optional[str] = Field(default=None, description="Additional notes about the lead")
-    add_timestamp: bool = Field(default=True, description="Always True - timestamp is added automatically")
+    name: Optional[str] = Field(
+        default=None,
+        description="Lead's full name (e.g., 'Hassan Ahmed', 'Ali Khan'). Collect this during conversation."
+    )
+    phone: Optional[str] = Field(
+        default=None,
+        description="Lead's phone number with country code (e.g., '03001234567', '+923001234567'). Used to identify returning customers."
+    )
+    selected_course: Optional[str] = Field(
+        default=None,
+        description="EXACT course name they selected (e.g., 'Certified Tax Advisor - Online', 'USA Taxation Course'). REQUIRED field - always provide the course they're interested in."
+    )
+    education_level: Optional[str] = Field(
+        default=None,
+        description="Their education level (e.g., 'Intermediate', 'Bachelors', 'Masters', 'CA', 'ACCA'). Collect when qualifying the lead."
+    )
+    goal: Optional[str] = Field(
+        default=None,
+        description="Their goal/motivation in their own words (e.g., 'Start own practice', 'Get job in Big 4', 'Learn for business'). Collect to understand their needs."
+    )
+    notes: Optional[str] = Field(
+        default=None,
+        description="Additional notes about the conversation, their concerns, objections, or specific requests (e.g., 'Asked about installments', 'Wants to join next batch', 'Referred by friend')."
+    )
+    add_timestamp: bool = Field(
+        default=True,
+        description="Always True - timestamp is added automatically to track when lead was created/updated."
+    )
 
 
 def create_supabase_tools(supabase_service) -> List:

@@ -1,0 +1,17 @@
+{
+  "response": "USA Taxation Course ki fees:\n\n💰 Fee: 80,000 PKR  \n📅 Duration: 3 months (12 weeks)  \n📆 Start: January 15, 2026  \n📍 Mode: Online only  \n\nDemo video dekhna chahenge?",
+  "conversation_id": "test_schema_pricing",
+  "turn_count": 1,
+  "context_used": [],
+  "stage": "COURSE_SELECTED",
+  "lead_data": {
+    "name": null,
+    "phone": null,
+    "selected_course": "USA_TAXATION",
+    "education_level": null,
+    "goal": null,
+    "demo_shared": false,
+    "enrolled": false
+  },
+  "timestamp": "2025-12-28T02:37:53.164356"
+}
