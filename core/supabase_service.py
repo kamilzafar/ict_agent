@@ -233,7 +233,7 @@ class SupabaseService:
             if phone:
                 data['phone'] = phone
             if selected_course:
-                data['selected_course'] = selected_course
+                data['course_selected'] = selected_course
             if education_level:
                 data['education_level'] = education_level
             if goal:
