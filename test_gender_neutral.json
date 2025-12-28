@@ -1,0 +1,17 @@
+{
+  "response": "Certified Tax Advisor (CTA) details:\n\n💰 Fee: 60,000 PKR (Physical + Online)\n📅 Duration: 4 months (16 weeks)\n📆 Next batch: January 20, 2026\n📍 Mode: Online + Physical\n\nDemo video share karun?",
+  "conversation_id": "test_gender_neutral",
+  "turn_count": 1,
+  "context_used": [],
+  "stage": "COURSE_SELECTED",
+  "lead_data": {
+    "name": null,
+    "phone": null,
+    "selected_course": "CTA",
+    "education_level": null,
+    "goal": null,
+    "demo_shared": false,
+    "enrolled": false
+  },
+  "timestamp": "2025-12-28T02:46:56.249092"
+}
