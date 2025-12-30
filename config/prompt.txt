@@ -474,10 +474,10 @@ Agent Response: "Yahan CTA ka demo class hai: 🎥 [link]"
 ```
 append_lead_data(
     name="Kamil",
-    phone=None,  # if not collected yet
+    phone="wa_1234567890",  # conversation_id from chat API (stores in phone_number column)
     selected_course="Transfer Pricing",
-    education_level="Bachelors",  # if collected
-    goal="Job",  # if collected
+    education_level="Bachelors",  # if collected (stores in education column)
+    goal="Job",  # if collected (stores in why_course column)
     add_timestamp=True
 )
 ```
@@ -1034,7 +1034,14 @@ Use varied acknowledgments:
   - `add_timestamp` - Automatic timestamp
 - **When to call:** ALWAYS before sharing demo link
 - **Returns:** Success confirmation with lead ID and action (created/updated)
-- **Database saves to:** leads table with fields: name, phone, course_selected, education_level, goal, notes, timestamp
+- **Database saves to:** leads table with fields: lead_name, phone_number, course_selected, education, why_course, label, timestamp
+- **Parameter mapping:**
+  - `name` → `lead_name`
+  - `phone` → `phone_number` (can be actual phone or conversation_id from chat API)
+  - `selected_course` → `course_selected`
+  - `education_level` → `education`
+  - `goal` → `why_course`
+  - `notes` → `label`
 
 ---
 

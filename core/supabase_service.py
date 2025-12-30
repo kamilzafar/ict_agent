@@ -229,17 +229,17 @@ class SupabaseService:
             # Build data dict (only include provided fields)
             data = {}
             if name:
-                data['name'] = name
+                data['lead_name'] = name
             if phone:
-                data['phone'] = phone
+                data['phone_number'] = phone
             if selected_course:
                 data['course_selected'] = selected_course
             if education_level:
-                data['education_level'] = education_level
+                data['education'] = education_level
             if goal:
-                data['goal'] = goal
+                data['why_course'] = goal
             if notes:
-                data['notes'] = notes
+                data['label'] = notes
 
             # Always add timestamp
             data['timestamp'] = datetime.now().isoformat()
@@ -256,14 +256,14 @@ class SupabaseService:
 
             if phone:
                 # Search by phone first (most unique identifier)
-                query = self.client.table("leads").select("*").eq("phone", phone).limit(1)
+                query = self.client.table("leads").select("*").eq("phone_number", phone).limit(1)
                 response = query.execute()
                 if response.data:
                     existing_lead = response.data[0]
 
             if not existing_lead and name:
                 # Search by name if phone not provided or not found
-                query = self.client.table("leads").select("*").ilike("name", name).limit(1)
+                query = self.client.table("leads").select("*").ilike("lead_name", name).limit(1)
                 response = query.execute()
                 if response.data:
                     existing_lead = response.data[0]

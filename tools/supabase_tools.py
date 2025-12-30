@@ -87,7 +87,7 @@ class AppendLeadDataInput(BaseModel):
     )
     phone: Optional[str] = Field(
         default=None,
-        description="Lead's phone number with country code (e.g., '03001234567', '+923001234567'). Used to identify returning customers."
+        description="Lead's phone number (e.g., '03001234567', '+923001234567') OR conversation_id from chat API (e.g., 'wa_1234567890'). Used to identify returning customers. Stores in phone_number column."
     )
     selected_course: Optional[str] = Field(
         default=None,
@@ -459,7 +459,7 @@ def create_supabase_tools(supabase_service) -> List:
 
         Args:
             name: Lead's name (if collected)
-            phone: Lead's phone number (if collected)
+            phone: Lead's phone number (e.g., '03001234567') OR conversation_id from chat API (e.g., 'wa_1234567890'). This will be stored in the phone_number column in Supabase.
             selected_course: Course they selected (REQUIRED)
             education_level: Their education level (if collected)
             goal: Their goal/motivation (if collected)
