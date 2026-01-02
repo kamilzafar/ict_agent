@@ -1,6 +1,10 @@
-# 🤖 ICT Enrollment Agent
-
 <div align="center">
+
+<a href="https://www.zensbot.com">
+  <img src="https://i.ibb.co/zhynLp9G/90731ee7-407d-4fb0-873d-7ad75535e262.jpg" alt="Zensbot Logo" width="300"/>
+</a>
+
+# 🤖 ICT Enrollment Agent
 
 [![Python](https://img.shields.io/badge/Python-3.13+-blue.svg)](https://www.python.org/downloads/)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.115+-green.svg)](https://fastapi.tiangolo.com/)
@@ -681,7 +685,9 @@ Then open a PR on GitHub!
 
 <div align="center">
 
-<img src="https://www.zensbot.com/logo.png" alt="Zensbot Logo" width="200"/>
+<a href="https://www.zensbot.com">
+  <img src="https://i.ibb.co/zhynLp9G/90731ee7-407d-4fb0-873d-7ad75535e262.jpg" alt="Zensbot Logo" width="250"/>
+</a>
 
 **Zensbot** is a leading AI automation and chatbot development company specializing in intelligent conversational agents for businesses across Pakistan and beyond.
 
@@ -794,6 +800,12 @@ SOFTWARE.
 ### ⭐ Star Us on GitHub!
 
 If you find this project useful, please consider giving it a star ⭐
+
+---
+
+<a href="https://www.zensbot.com">
+  <img src="https://i.ibb.co/zhynLp9G/90731ee7-407d-4fb0-873d-7ad75535e262.jpg" alt="Zensbot Logo" width="200"/>
+</a>
 
 **Built with ❤️ by [Zensbot](https://www.zensbot.com)**
 
