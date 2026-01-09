@@ -12,7 +12,8 @@
       "Bash(uv run python:*)",
       "Bash(curl:*)",
       "Bash(.venv/Scripts/python:*)",
-      "Bash(tree:*)"
+      "Bash(tree:*)",
+      "Bash(cat:*)"
     ]
   },
   "outputStyle": "default"
