@@ -688,27 +688,41 @@ Summary:"""
                         self.memory.update_lead_field(conversation_id, 'phone', args['phone'])
 
                         # Extract other data from notes or metadata
-                        notes = args.get('notes', '')
-                        metadata = args.get('metadata', {})
+                        # Handle None case: if notes is None or missing, use empty string
+                        notes = args.get('notes') or ''
+                        # Ensure metadata is always a dict
+                        metadata = args.get('metadata') or {}
 
                         # Try to extract course from notes or metadata
-                        if 'Selected_Course:' in notes:
-                            course = notes.split('Selected_Course:')[1].split(',')[0].strip()
-                            self.memory.update_lead_field(conversation_id, 'selected_course', course)
+                        if notes and 'Selected_Course:' in notes:
+                            try:
+                                course = notes.split('Selected_Course:')[1].split(',')[0].strip()
+                                if course:
+                                    self.memory.update_lead_field(conversation_id, 'selected_course', course)
+                            except (IndexError, AttributeError):
+                                logger.debug(f"Could not extract course from notes: {notes[:50]}")
                         elif metadata.get('course'):
                             self.memory.update_lead_field(conversation_id, 'selected_course', metadata['course'])
 
                         # Try to extract education level
-                        if 'Education_Level:' in notes:
-                            education = notes.split('Education_Level:')[1].split(',')[0].strip()
-                            self.memory.update_lead_field(conversation_id, 'education_level', education)
+                        if notes and 'Education_Level:' in notes:
+                            try:
+                                education = notes.split('Education_Level:')[1].split(',')[0].strip()
+                                if education:
+                                    self.memory.update_lead_field(conversation_id, 'education_level', education)
+                            except (IndexError, AttributeError):
+                                logger.debug(f"Could not extract education from notes: {notes[:50]}")
                         elif metadata.get('education'):
                             self.memory.update_lead_field(conversation_id, 'education_level', metadata['education'])
 
                         # Try to extract goal
-                        if 'Goal_Motivation:' in notes:
-                            goal = notes.split('Goal_Motivation:')[1].split(',')[0].strip()
-                            self.memory.update_lead_field(conversation_id, 'goal', goal)
+                        if notes and 'Goal_Motivation:' in notes:
+                            try:
+                                goal = notes.split('Goal_Motivation:')[1].split(',')[0].strip()
+                                if goal:
+                                    self.memory.update_lead_field(conversation_id, 'goal', goal)
+                            except (IndexError, AttributeError):
+                                logger.debug(f"Could not extract goal from notes: {notes[:50]}")
                         elif metadata.get('goal'):
                             self.memory.update_lead_field(conversation_id, 'goal', metadata['goal'])
 
