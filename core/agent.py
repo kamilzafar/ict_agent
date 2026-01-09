@@ -62,6 +62,8 @@ class IntelligentChatAgent:
             recursion_limit: Maximum graph recursion depth (default: 50)
             supabase_service: Optional SupabaseService instance
         """
+        self.model_name = model_name
+        self.temperature = temperature
         self.memory = LongTermMemory(persist_directory=memory_db_path)
         self.summarize_interval = summarize_interval
         self.recursion_limit = recursion_limit
