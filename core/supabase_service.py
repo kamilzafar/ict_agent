@@ -226,22 +226,29 @@ class SupabaseService:
         try:
             from datetime import datetime
 
+            # Schema mapping - ensures consistency with Supabase leads table:
+            # Table: public.leads
+            # Columns: lead_name (text), phone_number (text), course_selected (text), 
+            #          education (text), why_course (text), label (text), timestamp (text)
+            # All columns are TEXT type and nullable
+            
             # Build data dict (only include provided fields)
+            # Strip whitespace and validate non-empty strings to ensure data quality
             data = {}
-            if name:
-                data['lead_name'] = name
-            if phone:
-                data['phone_number'] = phone
-            if selected_course:
-                data['course_selected'] = selected_course
-            if education_level:
-                data['education'] = education_level
-            if goal:
-                data['why_course'] = goal
-            if notes:
-                data['label'] = notes
+            if name and name.strip():
+                data['lead_name'] = name.strip()
+            if phone and phone.strip():
+                data['phone_number'] = phone.strip()
+            if selected_course and selected_course.strip():
+                data['course_selected'] = selected_course.strip()
+            if education_level and education_level.strip():
+                data['education'] = education_level.strip()
+            if goal and goal.strip():
+                data['why_course'] = goal.strip()
+            if notes and notes.strip():
+                data['label'] = notes.strip()
 
-            # Always add timestamp
+            # Always add timestamp (ISO format string)
             data['timestamp'] = datetime.now().isoformat()
 
             # If no data provided, return error
