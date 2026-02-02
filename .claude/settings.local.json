@@ -13,7 +13,13 @@
       "Bash(curl:*)",
       "Bash(.venv/Scripts/python:*)",
       "Bash(tree:*)",
-      "Bash(cat:*)"
+      "Bash(cat:*)",
+      "Bash(.venv\\\\Scripts\\\\python.exe -m pytest:*)",
+      "Bash(.venv/Scripts/python.exe -m pytest tests/test_supabase_service_leads.py -v)",
+      "Bash(.venv/Scripts/pip.exe install:*)",
+      "Bash(cmd.exe /c \".venv\\\\Scripts\\\\pip.exe install pytest && .venv\\\\Scripts\\\\python.exe -m pytest tests/test_supabase_service_leads.py -v\")",
+      "Bash(docker exec:*)",
+      "WebFetch(domain:docs.sentry.io)"
     ]
   },
   "outputStyle": "default"

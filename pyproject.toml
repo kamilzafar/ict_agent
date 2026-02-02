@@ -29,6 +29,7 @@ dependencies = [
     "chromadb>=0.5.0",
     "supabase>=2.0.0",
     "langchain-redis>=0.1.0",
+    "sentry-sdk[fastapi]>=2.0.0",
 ]
 
 [project.optional-dependencies]

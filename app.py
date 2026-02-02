@@ -9,6 +9,79 @@ from typing import Optional, List, Dict, Any
 from datetime import datetime, timedelta
 from pathlib import Path
 
+from dotenv import load_dotenv
+
+# Load environment variables FIRST (before Sentry init)
+load_dotenv()
+
+# ============================================================================
+# Sentry Error Tracking
+# ============================================================================
+# Initialize Sentry BEFORE FastAPI app creation for proper error capture
+import sentry_sdk
+from sentry_sdk.integrations.fastapi import FastApiIntegration
+from sentry_sdk.integrations.starlette import StarletteIntegration
+from sentry_sdk.integrations.logging import LoggingIntegration
+
+# Get Sentry DSN from environment (optional - if not set, Sentry is disabled)
+SENTRY_DSN = os.getenv("SENTRY_DSN")
+
+if SENTRY_DSN:
+    # Get sample rate from environment
+    _sentry_sample_rate = float(os.getenv("SENTRY_TRACES_SAMPLE_RATE", "0.1"))
+
+    def _sentry_traces_sampler(sampling_context: dict) -> float:
+        """
+        Custom traces sampler to filter out noisy endpoints.
+        Docs: https://docs.sentry.io/platforms/python/configuration/sampling/
+        """
+        asgi_scope = sampling_context.get("asgi_scope", {})
+        path = asgi_scope.get("path", "")
+
+        # Don't trace health checks, docs, and static endpoints
+        if path in ["/health", "/", "/docs", "/redoc", "/openapi.json"]:
+            return 0.0
+
+        return _sentry_sample_rate
+
+    sentry_sdk.init(
+        dsn=SENTRY_DSN,
+        # Environment (production, staging, development)
+        environment=os.getenv("ENVIRONMENT", "development"),
+        # Release version for tracking deployments
+        release=os.getenv("APP_VERSION", "1.0.0"),
+        # Send PII data (IP addresses, user info, request headers)
+        # Docs: https://docs.sentry.io/platforms/python/data-management/data-collected/
+        send_default_pii=True,
+        # Custom traces sampler (filters out health checks)
+        # Note: When traces_sampler is set, traces_sample_rate is ignored
+        traces_sampler=_sentry_traces_sampler,
+        # Sample rate for profiling (0.0 to 1.0)
+        profiles_sample_rate=float(os.getenv("SENTRY_PROFILES_SAMPLE_RATE", "0.1")),
+        # Integrations for FastAPI
+        # Docs: https://docs.sentry.io/platforms/python/integrations/fastapi/
+        integrations=[
+            StarletteIntegration(
+                transaction_style="endpoint",  # Use endpoint function names
+                failed_request_status_codes={400, 403, *range(500, 599)},  # Capture these as errors
+            ),
+            FastApiIntegration(
+                transaction_style="endpoint",
+                failed_request_status_codes={400, 403, *range(500, 599)},
+            ),
+            LoggingIntegration(
+                level=logging.INFO,  # Capture INFO+ as breadcrumbs
+                event_level=logging.ERROR,  # Send ERROR+ as events
+            ),
+        ],
+        # Attach stack traces to log messages
+        attach_stacktrace=True,
+        # Include local variables in stack traces (helpful for debugging)
+        include_local_variables=True,
+        # Maximum breadcrumbs to keep
+        max_breadcrumbs=50,
+    )
+
 from fastapi import FastAPI, HTTPException, status, Request, Header, Depends, Security, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -16,15 +89,11 @@ from fastapi.security import APIKeyHeader
 from fastapi.exceptions import RequestValidationError
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 from pydantic import BaseModel, Field, field_validator
-from dotenv import load_dotenv
 import json
 import re
 
 from core.agent import IntelligentChatAgent
 from core.supabase_service import SupabaseService
-
-# Load environment variables
-load_dotenv()
 
 # Configure logging with production-ready settings
 log_level = os.getenv("LOG_LEVEL", "INFO").upper()
@@ -177,7 +246,8 @@ async def lifespan(app: FastAPI):
         logger.info(f"  Model: {os.getenv('MODEL_NAME', 'gpt-4.1-mini')}")
         logger.info(f"  Memory DB: {os.getenv('MEMORY_DB_PATH', '/app/memory_db')}")
         logger.info(f"  Supabase: {'✓ Enabled' if supabase_service else '✗ Disabled'}")
-        
+        logger.info(f"  Sentry: {'✓ Enabled' if SENTRY_DSN else '✗ Disabled'}")
+
         # Log tool availability
         sheets_configured = bool(os.getenv("GOOGLE_SHEETS_CREDENTIALS_PATH") and os.getenv("GOOGLE_SHEETS_SPREADSHEET_ID"))
         logger.info(f"  Google Sheets: {'✓ Configured' if sheets_configured else '✗ Not configured'}")
@@ -318,6 +388,16 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
 async def global_exception_handler(request: Request, exc: Exception):
     """Handle unhandled exceptions."""
     logger.error(f"Unhandled exception: {exc}", exc_info=True)
+
+    # Capture exception in Sentry with request context
+    if SENTRY_DSN:
+        with sentry_sdk.push_scope() as scope:
+            scope.set_tag("endpoint", request.url.path)
+            scope.set_tag("method", request.method)
+            scope.set_extra("url", str(request.url))
+            scope.set_extra("headers", dict(request.headers))
+            sentry_sdk.capture_exception(exc)
+
     return JSONResponse(
         status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         content={"detail": "An internal server error occurred"},
@@ -380,6 +460,7 @@ class HealthResponse(BaseModel):
     agent_initialized: bool
     memory_db_path: str
     supabase_connected: bool = False
+    sentry_enabled: bool = False
     version: str = "1.0.0"
 
 
@@ -393,6 +474,51 @@ async def root():
         "docs": "/docs",
         "health": "/health"
     }
+
+
+@app.get("/debug/sentry", tags=["Debug"])
+async def debug_sentry():
+    """Debug endpoint to test Sentry error reporting.
+
+    Triggers a test exception to verify Sentry is working.
+    Only available in non-production environments.
+    """
+    if is_production:
+        return {
+            "status": "skipped",
+            "message": "Sentry test endpoint disabled in production"
+        }
+
+    if not SENTRY_DSN:
+        return {
+            "status": "disabled",
+            "message": "Sentry is not configured. Set SENTRY_DSN in environment."
+        }
+
+    try:
+        # Send a test message to Sentry
+        sentry_sdk.capture_message("Sentry test message from ICT Agent", level="info")
+
+        # Trigger a test exception (caught and reported)
+        with sentry_sdk.push_scope() as scope:
+            scope.set_tag("test", "true")
+            scope.set_extra("purpose", "Verify Sentry integration")
+            try:
+                raise ValueError("This is a test exception for Sentry")
+            except ValueError as e:
+                sentry_sdk.capture_exception(e)
+
+        return {
+            "status": "success",
+            "message": "Test error sent to Sentry. Check your Sentry dashboard.",
+            "dsn_configured": True,
+            "environment": os.getenv("ENVIRONMENT", "development")
+        }
+    except Exception as e:
+        return {
+            "status": "error",
+            "message": f"Failed to send test to Sentry: {str(e)}"
+        }
 
 
 @app.get("/debug/supabase", tags=["Debug"])
@@ -489,6 +615,7 @@ async def health_check():
         agent_initialized=agent is not None,
         memory_db_path=os.getenv("MEMORY_DB_PATH", "/app/memory_db"),
         supabase_connected=supabase_connected,
+        sentry_enabled=bool(SENTRY_DSN),
         version="1.0.0"
     )
 
@@ -496,15 +623,15 @@ async def health_check():
 @app.post("/chat", tags=["Chat"], response_model=ChatResponse, dependencies=[Depends(verify_api_key)])
 async def chat(request: ChatRequest):
     """Send a message to the agent and get a response.
-    
+
     Supports multilingual content (Urdu, English, etc.) with UTF-8 encoding.
-    
+
     Args:
         request: Chat request containing message and optional conversation_id
-    
+
     Returns:
         ChatResponse with agent's response and metadata (UTF-8 encoded)
-    
+
     Raises:
         HTTPException: If agent is not initialized or error occurs
     """
@@ -514,7 +641,15 @@ async def chat(request: ChatRequest):
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Agent is not initialized"
         )
-    
+
+    # Set Sentry user context for better error tracking
+    if SENTRY_DSN:
+        sentry_sdk.set_user({
+            "id": request.conversation_id or "anonymous",
+            "conversation_id": request.conversation_id,
+        })
+        sentry_sdk.set_tag("conversation_id", request.conversation_id or "new")
+
     try:
         logger.info(f"Processing chat request - conversation_id: {request.conversation_id}")
         logger.debug(f"Message preview: {request.message[:100]}...")

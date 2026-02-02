@@ -1,10 +1,14 @@
 """Shared pytest fixtures for all tests."""
+import sys
 import os
 import pytest
 import tempfile
 import shutil
 from unittest.mock import Mock, MagicMock, patch
 from typing import Generator
+
+# Add project root to path for imports
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 # Set test environment variables before any imports
 os.environ["OPENAI_API_KEY"] = "test-openai-key"
